@@ -14,10 +14,23 @@ provided tools. Guidelines:
 - Take actions to fulfill the instruction, then stop. Keep chat messages short.
 - If you cannot do something, say so briefly in chat.`
 
+// Circuit breaker: cap API calls per rolling minute so a runaway loop can't burn
+// tokens unbounded. Configurable via AI_MAX_CALLS_PER_MIN.
+const MAX_CALLS_PER_MIN = Number(process.env.AI_MAX_CALLS_PER_MIN || 30)
+
 function createAgent(bot) {
   const history = []
   let runId = 0 // bumped on every new instruction; an older run sees its id go stale and bails
   let controller = null // aborts the in-flight API call when a new instruction preempts it
+  let callTimes = [] // timestamps of recent API calls, for the rate limiter
+
+  function overRateLimit() {
+    const now = Date.now()
+    callTimes = callTimes.filter((t) => now - t < 60000)
+    if (callTimes.length >= MAX_CALLS_PER_MIN) return true
+    callTimes.push(now)
+    return false
+  }
 
   function trim() {
     // Keep history bounded; cut at a real instruction boundary so we never
@@ -57,6 +70,10 @@ function createAgent(bot) {
 
     while (true) {
       if (myRunId !== runId) return // a newer instruction took over
+      if (overRateLimit()) {
+        console.error(`[agent] rate limit reached (${MAX_CALLS_PER_MIN} API calls/min) — pausing to avoid runaway token use.`)
+        return
+      }
       let response
       try {
         response = await client.messages.create(

@@ -53,10 +53,22 @@ function extractToolCalls(message) {
     .map((o) => ({ name: o.name, args: o.arguments || o.parameters || {} }))
 }
 
+// Circuit breaker: cap calls per rolling minute so a runaway loop can't spin forever.
+const MAX_CALLS_PER_MIN = Number(process.env.AI_MAX_CALLS_PER_MIN || 30)
+
 function createAgent(bot) {
   const history = []
   let runId = 0
   let controller = null
+  let callTimes = []
+
+  function overRateLimit() {
+    const now = Date.now()
+    callTimes = callTimes.filter((t) => now - t < 60000)
+    if (callTimes.length >= MAX_CALLS_PER_MIN) return true
+    callTimes.push(now)
+    return false
+  }
 
   function trim() {
     if (history.length <= 40) return
@@ -85,6 +97,10 @@ function createAgent(bot) {
 
     for (let step = 0; step < MAX_STEPS; step++) {
       if (myRunId !== runId) return
+      if (overRateLimit()) {
+        console.error(`[ollama] rate limit reached (${MAX_CALLS_PER_MIN} calls/min) — pausing.`)
+        return
+      }
       let data
       try {
         const res = await fetch(`${HOST}/api/chat`, {

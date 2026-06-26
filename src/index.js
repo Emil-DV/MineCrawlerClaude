@@ -47,6 +47,12 @@ function parseToolArgs(tool, argTokens) {
 // Your in-game name, used to resolve "me" when there's no chat sender (terminal).
 const OWNER = process.env.MC_OWNER || 'kaikdidk'
 
+// Only this player's chat commands are obeyed, so bots never act on each other's
+// chatter (which is what burns API tokens). Defaults to the owner; set
+// BOT_COMMANDER=* to let anyone command the bot.
+const COMMANDER = process.env.BOT_COMMANDER || OWNER
+const obeys = (username) => COMMANDER === '*' || username.toLowerCase() === COMMANDER.toLowerCase()
+
 // Phrase aliases → a direct tool call. `sender` is the chat author (undefined from
 // the terminal, where "me" falls back to OWNER).
 const ALIASES = {
@@ -188,6 +194,7 @@ bot.once('spawn', () => {
     // Chat without a matching [name]/[all] prefix is ignored.
     bot.on('chat', async (username, message) => {
       if (username === bot.username) return
+      if (!obeys(username)) return // only the commander is obeyed
       const cmd = commandFor(message, bot.username)
       if (!cmd) return // not addressed to this bot
       console.log(`<${username}> ${message}`)
@@ -223,6 +230,7 @@ bot.once('spawn', () => {
   // Commands from players in-game chat — must be addressed "[name] ..." or "[all] ...".
   bot.on('chat', (username, message) => {
     if (username === bot.username) return
+    if (!obeys(username)) return // only the commander is obeyed
     const cmd = commandFor(message, bot.username)
     if (!cmd) return // not addressed to this bot
     console.log(`<${username}> ${message}`)

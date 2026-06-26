@@ -154,6 +154,7 @@ function createAgent(bot) {
     const myRunId = runId
     if (controller) controller.abort()
     controller = new AbortController()
+    bot.cmdSeq = (bot.cmdSeq || 0) + 1 // signal long-running tools to bail
     try { bot.pathfinder.setGoal(null) } catch {}
     try { bot.clearControlStates() } catch {}
     try { bot.stopDigging() } catch {}

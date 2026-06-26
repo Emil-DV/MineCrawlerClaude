@@ -19,6 +19,12 @@ function mcData(bot) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+// Standalone/AI preemption: a long-running action records bot.cmdSeq at the start
+// and bails when it changes (a newer command or "stop" arrived). Outside the modes
+// that set bot.cmdSeq it stays undefined, so this is a harmless no-op.
+const startSeq = (bot) => bot.cmdSeq
+const preempted = (bot, seq) => bot.cmdSeq !== seq
+
 // Blocks a player can build into — placing here replaces them rather than being blocked.
 const REPLACEABLE = new Set([
   'air', 'cave_air', 'void_air', 'water', 'lava',
@@ -217,10 +223,12 @@ async function digTestTunnel(bot, { depth = 5 }) {
   }
 
   // Mine a 1-wide, 2-high tunnel `depth` blocks deep, staying at the same level.
+  const seq = startSeq(bot)
   let mined = 0
   let torches = 0
   let stopped = null
   for (let i = 0; i < depth; i++) {
+    if (preempted(bot, seq)) { stopped = 'stop'; break }
     const head = frontBlock(startY + 1)
     const feet = frontBlock(startY)
     // Abort if the next blocks are open space or liquid (broke into a cave/water/lava).
@@ -234,7 +242,7 @@ async function digTestTunnel(bot, { depth = 5 }) {
     if ((i + 1) % 10 === 0) { if (await placeWallTorch(torches % 2 === 0 ? 'left' : 'right')) torches++ }
   }
   const p = bot.entity.position
-  const note = stopped ? ` Stopped early — hit ${stopped} ahead.` : ''
+  const note = stopped === 'stop' ? ' Stopped.' : stopped ? ` Stopped early — hit ${stopped} ahead.` : ''
   return `Tunnel dug ${mined ? Math.ceil(mined / 2) : 0} deep at y=${startY} (mined ${mined} blocks, placed ${torches} torch(es)).${note} Now at (${Math.round(p.x)}, ${Math.round(p.y)}, ${Math.round(p.z)}).`
 }
 
@@ -257,8 +265,10 @@ async function mineNearestBlock(bot, { blockName, count = 1 }) {
   const block = mcData(bot).blocksByName[blockName]
   if (!block) return `Unknown block type "${blockName}".`
 
+  const seq = startSeq(bot)
   let mined = 0
   for (let i = 0; i < count; i++) {
+    if (preempted(bot, seq)) return `Mined ${mined} ${blockName} — stopped.`
     // Only target blocks the bot can actually see (clear line of sight) — no x-ray.
     // Re-scanned each loop, so blocks exposed by earlier digging become eligible.
     const positions = bot.findBlocks({ matching: block.id, maxDistance: 48, count: 64, useExtraInfo: (b) => bot.canSeeBlock(b) })
@@ -374,6 +384,7 @@ async function placeBlock(bot, { blockName, x, y, z }) {
 // player/bot, or temporarily unsupported) in further passes until a pass makes no
 // progress. Cells that are already non-fillable (solid) count as skipped, not missing.
 async function placeCells(bot, blockName, cells) {
+  const seq = startSeq(bot)
   let placed = 0
   let pending = cells
   let skipped = 0
@@ -382,6 +393,7 @@ async function placeCells(bot, blockName, cells) {
     const retry = []
     let progress = 0
     for (const c of pending) {
+      if (preempted(bot, seq)) return { placed, skipped, missing: pending.length, ranOut, stopped: true }
       const r = await placeOne(bot, blockName, c)
       if (r === 'placed') { placed++; progress++ }
       else if (r === 'no-item') { ranOut = true; break }
@@ -407,7 +419,8 @@ async function fillArea(bot, { blockName, x1, y1, z1, x2, y2, z2 }) {
     for (let x = xa; x <= xb; x++)
       for (let z = za; z <= zb; z++) cells.push(new Vec3(x, y, z))
 
-  const { placed, skipped, missing, ranOut } = await placeCells(bot, blockName, cells)
+  const { placed, skipped, missing, ranOut, stopped } = await placeCells(bot, blockName, cells)
+  if (stopped) return `Filled ${placed} ${blockName} — stopped.`
   if (ranOut) return `Filled ${placed} ${blockName}, then ran out.`
   return `Filled ${placed} ${blockName} (${skipped} already solid${missing ? `, ${missing} unfillable: occupied by a player or no support` : ''}).`
 }
@@ -422,7 +435,8 @@ async function buildWall(bot, { blockName, x, y, z, direction = 'x', length, hei
   for (let h = 0; h < height; h++) // bottom-up so lower blocks support the row above
     for (let l = 0; l < length; l++) cells.push(new Vec3(x + dx * l, y + h, z + dz * l))
 
-  const { placed, skipped, missing, ranOut } = await placeCells(bot, blockName, cells)
+  const { placed, skipped, missing, ranOut, stopped } = await placeCells(bot, blockName, cells)
+  if (stopped) return `Built ${placed} ${blockName} — stopped.`
   if (ranOut) return `Built ${placed} ${blockName}, then ran out.`
   return `Built a ${blockName} wall: ${placed} placed (${skipped} already solid${missing ? `, ${missing} unfillable` : ''}).`
 }
@@ -476,9 +490,11 @@ async function fillPit(bot) {
   if (topY < fy) return `You're already at or above ground level — no pit to fill.`
 
   // Fill bottom-up, skipping the bot's own column (can't place where it stands).
+  const seq = startSeq(bot)
   let placed = 0, skipped = 0, failed = 0
   const selfCol = key(fx, fz)
   for (let y = fy; y <= topY; y++) {
+    if (preempted(bot, seq)) return `Filled ${placed} ${fillName} — stopped.`
     for (const [k, [x, z]] of footprint) {
       if (k === selfCol) continue
       const r = await placeOne(bot, fillName, new Vec3(x, y, z))
@@ -526,8 +542,10 @@ async function plantField(bot, { seedName }) {
     .filter((p) => p.y === floorY)
   if (!positions.length) return `No grass blocks at your level (y=${floorY}) within range.`
 
+  const seq = startSeq(bot)
   let tilled = 0, planted = 0, skipped = 0
   for (const pos of positions) {
+    if (preempted(bot, seq)) return `Hoed ${tilled}, planted ${planted} ${seedName} — stopped.`
     const above = bot.blockAt(pos.offset(0, 1, 0))
     if (above && !REPLACEABLE.has(above.name)) { skipped++; continue } // need clear space to plant
     await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)).catch(() => {})
@@ -567,6 +585,7 @@ async function mineArea(bot, { x1, y1, z1, x2, y2, z2, blockName }) {
     for (let x = xa; x <= xb; x++)
       for (let z = za; z <= zb; z++) pending.push(new Vec3(x, y, z))
 
+  const seq = startSeq(bot)
   let mined = 0
   let empty = 0
   let missing = 0
@@ -576,6 +595,7 @@ async function mineArea(bot, { x1, y1, z1, x2, y2, z2, blockName }) {
     const retry = []
     let progress = 0
     for (const p of pending) {
+      if (preempted(bot, seq)) { missing = pending.length; return `Mined ${mined} block(s) — stopped.` }
       const block = bot.blockAt(p)
       if (!block || block.name === 'air') { if (pass === 0) empty++; continue }
       if (onlyId != null && block.type !== onlyId) continue
@@ -654,9 +674,11 @@ async function chitchat(bot, { durationSec = 30, username }) {
   }
   const others = () => Object.values(bot.players).filter((p) => p.entity && p.username !== bot.username)
 
+  const seq = startSeq(bot)
   const start = Date.now()
   let glances = 0
   while (Date.now() - start < dur) {
+    if (preempted(bot, seq)) return `Stopped chitchatting after ${glances} glances.`
     const list = others()
     if (!list.length) break
     const me = username ? list.find((p) => p.username === username)?.entity : null
@@ -743,8 +765,10 @@ async function attackEntity(bot, { target }) {
   const id = victim.id
   const name = victim.name || victim.username || 'entity'
 
+  const seq = startSeq(bot)
   let hits = 0
   while (victim && victim.isValid && hits < 25) {
+    if (preempted(bot, seq)) return `Attacked ${name} (${hits} hit${hits === 1 ? '' : 's'}) — stopped.`
     if (bot.entity.position.distanceTo(victim.position) > 3) {
       await bot.pathfinder.goto(new goals.GoalNear(victim.position.x, victim.position.y, victim.position.z, 2)).catch(() => {})
     }
@@ -782,8 +806,10 @@ async function useItem(bot) {
 }
 
 async function collectItems(bot, { range = 16 }) {
+  const seq = startSeq(bot)
   let collected = 0
   while (collected < 50) {
+    if (preempted(bot, seq)) return `Collected ${collected} stack(s) — stopped.`
     const drop = bot.nearestEntity(
       (e) => e.name === 'item' && bot.entity.position.distanceTo(e.position) <= range
     )

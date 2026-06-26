@@ -127,6 +127,7 @@ function createAgent(bot) {
     controller = new AbortController()
 
     // Unblock any in-progress movement/digging so a stuck action returns at once.
+    bot.cmdSeq = (bot.cmdSeq || 0) + 1 // signal long-running tools to bail
     try { bot.pathfinder.setGoal(null) } catch {}
     try { bot.clearControlStates() } catch {}
     try { bot.stopDigging() } catch {}

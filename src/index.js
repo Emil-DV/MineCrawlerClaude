@@ -176,6 +176,17 @@ bot.once('spawn', () => {
   // Standalone: no AI loop. Both the terminal and in-game chat can run actions by
   // typing a tool name + args; anything else is treated as plain chat/command.
   if (STANDALONE) {
+    // Standalone preemption: each new command bumps bot.cmdSeq and hard-stops the
+    // bot, so a later "stop" (or any new command) interrupts the running action.
+    // Long-running actions check bot.cmdSeq and bail when it changes.
+    bot.cmdSeq = 0
+    const preempt = () => {
+      bot.cmdSeq++
+      try { bot.pathfinder.setGoal(null) } catch {}
+      try { bot.clearControlStates() } catch {}
+      try { bot.stopDigging() } catch {}
+    }
+
     // Run a tool if the first word names one. Returns a result string, or null
     // if the text isn't a tool invocation.
     const runTool = async (text) => {
@@ -203,6 +214,7 @@ bot.once('spawn', () => {
       const cmd = commandFor(message, bot.username)
       if (!cmd) return // not addressed to this bot
       console.log(`<${username}> ${message}`)
+      preempt() // interrupt any running action (so "stop" / new commands take effect now)
       const aliased = runAliasOrNull(cmd, username)
       const result = aliased ? await aliased : await runTool(cmd)
       if (result !== null) {
@@ -219,6 +231,7 @@ bot.once('spawn', () => {
       const text = line.trim()
       if (!text) { rl.prompt(); return }
       if (text === '??' || text === '?' || text === 'help') { printCommands(); rl.prompt(); return }
+      preempt() // interrupt any running action
       const aliased = runAliasOrNull(text)
       const result = aliased ? await aliased : await runTool(text)
       if (result !== null) console.log(`  ${result}`)

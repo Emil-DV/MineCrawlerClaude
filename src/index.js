@@ -67,15 +67,20 @@ function resolveAlias(text, sender) {
   return fn ? fn(sender) : null
 }
 
-// Chat commands must be addressed with a [name] or [all] prefix. Returns the
-// command with the prefix stripped if it targets this bot, else null (ignore).
-// This also stops bots from reacting to each other's chatter / result echoes.
+// Resolve a chat message to a command for this bot, or null to ignore it.
+// An optional [name]/[all] prefix targets a specific bot. With BOT_REQUIRE_NAME
+// off (default), a message with no prefix is treated as a command for this bot;
+// with it on, only explicitly addressed commands are obeyed. (Bot-to-bot loops
+// are already prevented by the commander allow-list, so the prefix is optional.)
+const REQUIRE_NAME = process.env.BOT_REQUIRE_NAME === 'true'
 function commandFor(message, botName) {
   const m = message.match(/^\s*\[([^\]]+)\]\s*(.+)$/)
-  if (!m) return null
-  const target = m[1].trim().toLowerCase()
-  if (target === 'all' || target === botName.toLowerCase()) return m[2].trim()
-  return null
+  if (m) {
+    const target = m[1].trim().toLowerCase()
+    if (target === 'all' || target === botName.toLowerCase()) return m[2].trim()
+    return null // addressed to a different bot
+  }
+  return REQUIRE_NAME ? null : message.trim()
 }
 
 // Mode of operation:

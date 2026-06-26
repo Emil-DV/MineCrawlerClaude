@@ -122,7 +122,13 @@ function createAgent(bot) {
       if (calls.length === 0) {
         history.push({ role: 'assistant', content: msg.content || '' })
         const said = (msg.content || '').trim()
-        if (said) console.log('[ollama]', said)
+        if (said) {
+          console.log('[ollama]', said)
+          // Small models often "talk" via the final reply instead of the chat tool,
+          // so speak it in-game (unless it's a leftover JSON blob). Capped to one
+          // chat line; other bots ignore it (commander allow-list).
+          if (!/^[[{]/.test(said)) bot.chat(said.replace(/\s+/g, ' ').slice(0, 240))
+        }
         return
       }
 

@@ -1003,7 +1003,11 @@ function loadWaypoints() {
   try { return JSON.parse(fs.readFileSync(WAYPOINTS_FILE, 'utf8')) } catch { return {} }
 }
 function saveWaypoints(wp) {
-  fs.writeFileSync(WAYPOINTS_FILE, JSON.stringify(wp, null, 2) + '\n')
+  // Write to a temp file then rename, so a crash mid-write can't corrupt or
+  // truncate the saved waypoints.
+  const tmp = WAYPOINTS_FILE + '.tmp'
+  fs.writeFileSync(tmp, JSON.stringify(wp, null, 2) + '\n')
+  fs.renameSync(tmp, WAYPOINTS_FILE)
 }
 // The player whose position waypoints are saved at: the configured commander.
 function commanderName() {

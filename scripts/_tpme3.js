@@ -1,0 +1,15 @@
+require('dotenv').config()
+const mineflayer = require('mineflayer')
+const sleep = ms=>new Promise(r=>setTimeout(r,ms))
+const bot = mineflayer.createBot({host:'localhost',port:25565,username:'kaikdidk',version:'1.21.4',auth:'offline'})
+bot.on('error',e=>console.log('ERR',e.message))
+const P=()=>{const p=bot.entity.position;return `${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}`}
+bot.once('spawn', async ()=>{
+  await sleep(1000); bot.chat('/op WpBot'); await sleep(1500)
+  bot.chat('/tp kaikdidk 250 100 250'); await sleep(3000); console.log('1) at spot, pos=', P())
+  bot.chat('saveWaypoint spotX'); await sleep(3000)
+  bot.chat('/tp kaikdidk 600 100 600'); await sleep(3000); console.log('2) moved far, pos=', P())
+  bot.chat('tpMe spotX'); await sleep(3000); console.log('3) after tpMe, pos=', P())
+  console.log(P()==='250,100,250' ? 'PASS: tpMe returned me to the waypoint' : 'FAIL (pos '+P()+')')
+  bot.quit(); process.exit(0)
+})

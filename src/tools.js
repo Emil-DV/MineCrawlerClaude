@@ -40,6 +40,15 @@ const tools = [
     },
   },
   {
+    name: 'tpMe',
+    description: 'Teleport the commander (you) to a saved waypoint by name. Requires the bot to be opped (uses /tp).',
+    input_schema: {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    },
+  },
+  {
     name: 'listWaypoints',
     description: 'List all saved waypoints and their coordinates.',
     input_schema: { type: 'object', properties: {} },

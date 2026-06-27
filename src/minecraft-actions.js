@@ -1034,6 +1034,21 @@ async function tpWaypoint(bot, { name }) {
   return `Couldn't teleport to "${w.name}" — the bot must be opped for /tp (op it in-game or in server/ops.json).`
 }
 
+async function tpMe(bot, { name, username }) {
+  const w = loadWaypoints()[name.toLowerCase()]
+  if (!w) return `No waypoint named "${name}". Use listWaypoints to see saved ones.`
+  const who = username || commanderName()
+  const ent = bot.players[who]?.entity
+  const before = ent ? ent.position.clone() : null
+  bot.chat(`/tp ${who} ${w.x} ${w.y} ${w.z}`)
+  await sleep(700)
+  const after = bot.players[who]?.entity
+  if (before && after && after.position.distanceTo(before) > 2) {
+    return `Teleported ${who} to "${w.name}" (${w.x}, ${w.y}, ${w.z}).`
+  }
+  return `Sent ${who} to "${w.name}" (${w.x}, ${w.y}, ${w.z}). If nothing happened, the bot needs to be opped (/tp requires op).`
+}
+
 function listWaypoints() {
   const list = Object.values(loadWaypoints())
   if (!list.length) return 'No waypoints saved yet. Use saveWaypoint <name>.'
@@ -1052,6 +1067,7 @@ module.exports = {
   observe,
   saveWaypoint,
   tpWaypoint,
+  tpMe,
   listWaypoints,
   deleteWaypoint,
   boatTo,

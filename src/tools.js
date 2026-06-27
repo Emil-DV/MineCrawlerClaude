@@ -8,6 +8,38 @@ const tools = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'saveWaypoint',
+    description: 'Save a named waypoint at the commander\'s current position (e.g. "saveWaypoint home"). Saved to disk, survives restarts.',
+    input_schema: {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'tpWaypoint',
+    description: 'Teleport the bot to a saved waypoint by name. Requires the bot to be opped (uses /tp).',
+    input_schema: {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'listWaypoints',
+    description: 'List all saved waypoints and their coordinates.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'deleteWaypoint',
+    description: 'Delete a saved waypoint by name.',
+    input_schema: {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    },
+  },
+  {
     name: 'chat',
     description: 'Send a message in the in-game chat. Use this to talk to players.',
     input_schema: {

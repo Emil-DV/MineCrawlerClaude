@@ -2,6 +2,8 @@
 // that gets fed back to Claude as the tool result, so keep them descriptive.
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
+const fs = require('fs')
+const path = require('path')
 
 // Unit offsets to the six neighbours of a block.
 const FACES = [
@@ -891,8 +893,63 @@ async function withdrawFromChest(bot, { x, y, z, itemName, count = 1 }) {
   return `Withdrew ${count} ${itemName}.`
 }
 
+// --- Named waypoints (persisted to waypoints.json) ---
+const WAYPOINTS_FILE = path.join(__dirname, '..', 'waypoints.json')
+function loadWaypoints() {
+  try { return JSON.parse(fs.readFileSync(WAYPOINTS_FILE, 'utf8')) } catch { return {} }
+}
+function saveWaypoints(wp) {
+  fs.writeFileSync(WAYPOINTS_FILE, JSON.stringify(wp, null, 2) + '\n')
+}
+// The player whose position waypoints are saved at: the configured commander.
+function commanderName() {
+  const c = process.env.BOT_COMMANDER
+  if (c && c !== '*') return c
+  return process.env.MC_OWNER || 'kaikdidk'
+}
+
+function saveWaypoint(bot, { name }) {
+  const who = commanderName()
+  const ent = bot.players[who]?.entity || nearestPlayer(bot)
+  if (!ent) return `Can't see ${who} to save their position — stand near the bot and try again.`
+  const p = ent.position
+  const wp = loadWaypoints()
+  const x = Math.round(p.x), y = Math.round(p.y), z = Math.round(p.z)
+  wp[name.toLowerCase()] = { name, x, y, z }
+  saveWaypoints(wp)
+  return `Saved waypoint "${name}" at (${x}, ${y}, ${z}).`
+}
+
+async function tpWaypoint(bot, { name }) {
+  const w = loadWaypoints()[name.toLowerCase()]
+  if (!w) return `No waypoint named "${name}". Use listWaypoints to see saved ones.`
+  const before = bot.entity.position.clone()
+  bot.chat(`/tp ${bot.username} ${w.x} ${w.y} ${w.z}`)
+  await sleep(700)
+  if (bot.entity.position.distanceTo(before) > 2) return `Teleported to "${w.name}" (${w.x}, ${w.y}, ${w.z}).`
+  return `Couldn't teleport to "${w.name}" — the bot must be opped for /tp (op it in-game or in server/ops.json).`
+}
+
+function listWaypoints() {
+  const list = Object.values(loadWaypoints())
+  if (!list.length) return 'No waypoints saved yet. Use saveWaypoint <name>.'
+  return 'Waypoints: ' + list.map((w) => `${w.name} (${w.x}, ${w.y}, ${w.z})`).join('; ') + '.'
+}
+
+function deleteWaypoint(bot, { name }) {
+  const wp = loadWaypoints()
+  if (!wp[name.toLowerCase()]) return `No waypoint named "${name}".`
+  delete wp[name.toLowerCase()]
+  saveWaypoints(wp)
+  return `Deleted waypoint "${name}".`
+}
+
 module.exports = {
   observe,
+  saveWaypoint,
+  tpWaypoint,
+  listWaypoints,
+  deleteWaypoint,
   chat,
   goTo,
   goToPlayer,

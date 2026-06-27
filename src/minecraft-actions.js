@@ -984,6 +984,19 @@ async function boatTo(bot, { x, z }) {
   return `Stopped near (${Math.round(cx)}, ${Math.round(boatY)}, ${Math.round(cz)}) — ${Math.round(dist)} blocks short (water ran out or stuck).`
 }
 
+async function sleepInBed(bot) {
+  if (bot.isSleeping) return 'Already sleeping.'
+  const bed = bot.findBlock({ matching: (b) => bot.isABed(b), maxDistance: 32 })
+  if (!bed) return 'No bed found within 32 blocks.'
+  await bot.pathfinder.goto(new goals.GoalNear(bed.position.x, bed.position.y, bed.position.z, 2)).catch(() => {})
+  try {
+    await bot.sleep(bed)
+  } catch (e) {
+    return `Found a bed at (${bed.position.x}, ${bed.position.y}, ${bed.position.z}) but couldn't sleep: ${e.message}.`
+  }
+  return `Sleeping in the bed at (${bed.position.x}, ${bed.position.y}, ${bed.position.z}).`
+}
+
 // --- Named waypoints (persisted to waypoints.json) ---
 const WAYPOINTS_FILE = path.join(__dirname, '..', 'waypoints.json')
 function loadWaypoints() {
@@ -1042,6 +1055,7 @@ module.exports = {
   listWaypoints,
   deleteWaypoint,
   boatTo,
+  sleep: sleepInBed,
   chat,
   goTo,
   goToPlayer,

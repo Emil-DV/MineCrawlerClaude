@@ -8,6 +8,11 @@ const tools = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'sleep',
+    description: 'Find the nearest bed within range, walk to it, and sleep (skips the night). Only works at night or during a thunderstorm, with no monsters nearby.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
     name: 'boatTo',
     description: 'Travel across water by boat to (x, z). Uses a nearby boat if there is one, else places a boat from inventory onto nearby water, rides toward the target, and dismounts. Best-effort steering.',
     input_schema: {

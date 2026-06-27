@@ -268,13 +268,28 @@ async function mineNearestBlock(bot, { blockName, count = 1 }) {
   if (!block) return `Unknown block type "${blockName}".`
 
   const seq = startSeq(bot)
+  // Only target blocks the bot can actually see (clear line of sight) — no x-ray.
+  const scan = () => bot.findBlocks({ matching: block.id, maxDistance: 48, count: 64, useExtraInfo: (b) => bot.canSeeBlock(b) })
+
   let mined = 0
   for (let i = 0; i < count; i++) {
     if (preempted(bot, seq)) return `Mined ${mined} ${blockName} — stopped.`
-    // Only target blocks the bot can actually see (clear line of sight) — no x-ray.
     // Re-scanned each loop, so blocks exposed by earlier digging become eligible.
-    const positions = bot.findBlocks({ matching: block.id, maxDistance: 48, count: 64, useExtraInfo: (b) => bot.canSeeBlock(b) })
-    if (!positions.length) break
+    let positions = scan()
+    if (!positions.length) {
+      // Look around in every direction (cardinals + up + down) before giving up,
+      // then re-scan once. Visibility is line-of-sight from the bot's eyes, so the
+      // turning is a survey gesture; the re-scan also catches blocks whose chunks
+      // just finished loading as the bot pauses at each heading.
+      const headings = [[0, 0], [Math.PI / 2, 0], [Math.PI, 0], [(3 * Math.PI) / 2, 0], [bot.entity.yaw, -1.0], [bot.entity.yaw, 1.0]]
+      for (const [yaw, pitch] of headings) {
+        if (preempted(bot, seq)) return `Mined ${mined} ${blockName} — stopped.`
+        await bot.look(yaw, pitch, true)
+        await sleep(200)
+      }
+      positions = scan()
+      if (!positions.length) break // looked everywhere, still nothing visible
+    }
 
     // Order by alignment with the nearest player's gaze (what they're looking at
     // first, then sweep outward); fall back to nearest if no player is around.

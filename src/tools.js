@@ -8,6 +8,15 @@ const tools = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'boatTo',
+    description: 'Travel across water by boat to (x, z). Uses a nearby boat if there is one, else places a boat from inventory onto nearby water, rides toward the target, and dismounts. Best-effort steering.',
+    input_schema: {
+      type: 'object',
+      properties: { x: { type: 'number' }, z: { type: 'number' } },
+      required: ['x', 'z'],
+    },
+  },
+  {
     name: 'saveWaypoint',
     description: 'Save a named waypoint at the commander\'s current position (e.g. "saveWaypoint home"). Saved to disk, survives restarts.',
     input_schema: {

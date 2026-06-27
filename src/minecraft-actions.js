@@ -908,6 +908,82 @@ async function withdrawFromChest(bot, { x, y, z, itemName, count = 1 }) {
   return `Withdrew ${count} ${itemName}.`
 }
 
+async function boatTo(bot, { x, z }) {
+  const findBoat = () => bot.nearestEntity((e) => /_boat$|^boat$/i.test(e.name || ''))
+
+  // Prefer a nearby placed boat; otherwise place one from inventory onto water.
+  let boat = findBoat()
+  if (boat && bot.entity.position.distanceTo(boat.position) > 6) {
+    await bot.pathfinder.goto(new goals.GoalNear(boat.position.x, boat.position.y, boat.position.z, 2)).catch(() => {})
+    boat = findBoat()
+  }
+  if (!boat) {
+    const item = bot.inventory.items().find((i) => /_boat$/.test(i.name))
+    if (!item) return `No boat nearby and none in inventory.`
+    let water = bot.findBlock({ matching: (b) => b && b.name === 'water', maxDistance: 8 })
+    if (!water) return `No water nearby to launch a boat.`
+    await bot.pathfinder.goto(new goals.GoalNear(water.position.x, water.position.y, water.position.z, 2)).catch(() => {})
+    await bot.equip(item, 'hand')
+    // Aim at the surface of the closest water block and right-click to launch it.
+    water = bot.findBlock({ matching: (b) => b && b.name === 'water', maxDistance: 5 }) || water
+    for (let attempt = 0; attempt < 3 && !boat; attempt++) {
+      await bot.lookAt(water.position.offset(0.5, 0.9, 0.5), true)
+      await sleep(250)
+      bot.activateItem()
+      await sleep(700)
+      boat = findBoat()
+    }
+    if (!boat) return `Couldn't place the boat on the water.`
+  }
+
+  // Board it.
+  if (bot.entity.position.distanceTo(boat.position) > 3) {
+    await bot.pathfinder.goto(new goals.GoalNear(boat.position.x, boat.position.y, boat.position.z, 1)).catch(() => {})
+  }
+  bot.mount(boat)
+  await sleep(800)
+  if (!bot.vehicle) return `Couldn't board the boat.`
+
+  // Drive the boat toward (x, z) by sending vehicle_move packets (boats are
+  // client-authoritative in modern MC, so we set the boat's position directly).
+  // Track the position ourselves; bail at the water's edge.
+  const seq = startSeq(bot)
+  const start = Date.now()
+  const bp = bot.vehicle.position
+  let cx = bp.x, cz = bp.z
+  const boatY = bp.y
+  const isWater = (px, pz) => {
+    for (const dy of [0, -1]) {
+      const b = bot.blockAt(new Vec3(Math.floor(px), Math.floor(boatY) + dy, Math.floor(pz)))
+      if (b && b.name === 'water') return true
+    }
+    return false
+  }
+  const STEP = 0.5
+  let dist = Math.hypot(x - cx, z - cz)
+  let dryRun = 0 // consecutive off-water steps (stop only after a sustained run on land)
+  while (Date.now() - start < 60000 && dist >= 2) {
+    if (preempted(bot, seq)) break
+    const dx = x - cx, dz = z - cz
+    dist = Math.hypot(dx, dz)
+    if (dist < 2) break
+    const nx = cx + (dx / dist) * Math.min(STEP, dist)
+    const nz = cz + (dz / dist) * Math.min(STEP, dist)
+    dryRun = isWater(nx, nz) ? 0 : dryRun + 1
+    if (dryRun > 8) break // ~4 blocks over land — the water has run out
+    const yawDeg = (Math.atan2(-dx, dz) * 180) / Math.PI
+    try {
+      bot._client.write('vehicle_move', { x: nx, y: boatY, z: nz, yaw: yawDeg, pitch: 0, onGround: false })
+    } catch { break }
+    cx = nx; cz = nz
+    await sleep(80)
+  }
+  bot.dismount()
+  await sleep(400)
+  if (dist < 2) return `Boated to (${Math.round(cx)}, ${Math.round(boatY)}, ${Math.round(cz)}).`
+  return `Stopped near (${Math.round(cx)}, ${Math.round(boatY)}, ${Math.round(cz)}) — ${Math.round(dist)} blocks short (water ran out or stuck).`
+}
+
 // --- Named waypoints (persisted to waypoints.json) ---
 const WAYPOINTS_FILE = path.join(__dirname, '..', 'waypoints.json')
 function loadWaypoints() {
@@ -965,6 +1041,7 @@ module.exports = {
   tpWaypoint,
   listWaypoints,
   deleteWaypoint,
+  boatTo,
   chat,
   goTo,
   goToPlayer,

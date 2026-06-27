@@ -145,6 +145,9 @@ async function goToPlayer(bot, { username, range = 2 }) {
   if (!target) return `Can't see player "${username}".`
   const p = target.position
   await bot.pathfinder.goto(new goals.GoalNear(p.x, p.y, p.z, range))
+  // Let summoned bots gather: pause personal-space briefly so the bot doesn't
+  // shove off another bot that arrives next to it.
+  bot.gatherUntil = Date.now() + 8000
   return `Reached ${username}.`
 }
 
@@ -152,6 +155,7 @@ function followPlayer(bot, { username, range = 2 }) {
   const target = bot.players[username]?.entity
   if (!target) return `Can't see player "${username}".`
   bot.pathfinder.setGoal(new goals.GoalFollow(target, range), true)
+  bot.gatherUntil = Date.now() + 8000
   return `Now following ${username}.`
 }
 

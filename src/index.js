@@ -115,6 +115,7 @@ bot.once('spawn', () => {
   let keepingDistance = false
   const personalSpace = setInterval(async () => {
     if (keepingDistance || !bot.entity || bot.pathfinder.isMoving()) return
+    if (bot.gatherUntil && Date.now() < bot.gatherUntil) return // just summoned — let bots gather
     let nearest = null
     let best = Infinity
     for (const p of Object.values(bot.players)) {

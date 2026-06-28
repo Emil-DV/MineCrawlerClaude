@@ -50,6 +50,24 @@ const OWNER = process.env.MC_OWNER || 'kaikdidk'
 // Bots prefix their result echoes with this so other bots never obey them.
 const ECHO = '»'
 
+// Split a long string into chat-sized chunks on word boundaries (so e.g. a long
+// inventory list goes out as several messages instead of being truncated).
+function splitForChat(text, max = 180, limit = 6) {
+  const parts = []
+  let cur = ''
+  for (const w of text.split(' ')) {
+    if (cur && (cur + ' ' + w).length > max) {
+      parts.push(cur)
+      cur = w
+      if (parts.length >= limit) return parts
+    } else {
+      cur = cur ? cur + ' ' + w : w
+    }
+  }
+  if (cur) parts.push(cur)
+  return parts
+}
+
 // Only this player's chat commands are obeyed, so bots never act on each other's
 // chatter (which is what burns API tokens). Defaults to the owner; set
 // BOT_COMMANDER=* to let anyone command the bot.
@@ -235,7 +253,13 @@ bot.once('spawn', () => {
       const result = aliased ? await aliased : await runTool(cmd)
       if (result !== null) {
         console.log(`  ${result}`)
-        bot.chat(`${ECHO} ${result.replace(/\s+/g, ' ').slice(0, 180)}`) // report back (marked)
+        // Report back, split across several messages if long (with a small delay
+        // between them so the server doesn't treat it as spam).
+        const parts = splitForChat(result.replace(/\s+/g, ' '))
+        for (let i = 0; i < parts.length; i++) {
+          if (i) await new Promise((r) => setTimeout(r, 400))
+          bot.chat(`${ECHO} ${parts[i]}`)
+        }
       }
     })
 

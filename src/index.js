@@ -113,6 +113,7 @@ bot.once('spawn', () => {
   bot.followMovements.canDig = false
   bot.followMovements.scafoldingBlocks = []
   bot.followMovements.allow1by1towers = false
+  bot.followMovements.canOpenDoors = true // no breaking/placing, but route through doors
   bot.pathfinder.setMovements(bot.defaultMovements)
   console.log(`Bot spawned as "${bot.username}" (${STANDALONE ? 'standalone' : OLLAMA ? `ollama: ${process.env.OLLAMA_MODEL || 'qwen2.5-coder:7b'}` : 'anthropic'} mode).`)
 

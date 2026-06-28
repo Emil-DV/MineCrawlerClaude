@@ -47,6 +47,9 @@ function parseToolArgs(tool, argTokens) {
 // Your in-game name, used to resolve "me" when there's no chat sender (terminal).
 const OWNER = process.env.MC_OWNER || 'kaikdidk'
 
+// Bots prefix their result echoes with this so other bots never obey them.
+const ECHO = '»'
+
 // Only this player's chat commands are obeyed, so bots never act on each other's
 // chatter (which is what burns API tokens). Defaults to the owner; set
 // BOT_COMMANDER=* to let anyone command the bot.
@@ -214,14 +217,11 @@ bot.once('spawn', () => {
       }
     }
 
-    // Result echoes are prefixed with this marker so bots don't obey each other's
-    // output. (Targeting below already blocks this, but it keeps echoes out of the log.)
-    const ECHO = '»'
-
     // Drive the bot via chat addressed to it: "[BotA] goTo 10 64 20" or "[all] come here".
     // Chat without a matching [name]/[all] prefix is ignored.
     bot.on('chat', async (username, message) => {
       if (username === bot.username) return
+      if (message.startsWith(ECHO)) return // a bot's result echo — never obey it (would clobber goals)
       if (!obeys(username)) return // only the commander is obeyed
       const cmd = commandFor(message, bot.username)
       if (!cmd) return // not addressed to this bot
@@ -260,6 +260,7 @@ bot.once('spawn', () => {
   // Commands from players in-game chat — must be addressed "[name] ..." or "[all] ...".
   bot.on('chat', (username, message) => {
     if (username === bot.username) return
+    if (message.startsWith(ECHO)) return // a bot's result echo — never obey it
     if (!obeys(username)) return // only the commander is obeyed
     const cmd = commandFor(message, bot.username)
     if (!cmd) return // not addressed to this bot

@@ -879,19 +879,22 @@ async function depositToChest(bot, { x, y, z, itemName, count }) {
   const block = bot.blockAt(new Vec3(x, y, z))
   if (!block) return `No block at (${x}, ${y}, ${z}).`
   if (!isContainerBlock(block)) return `Block at (${x}, ${y}, ${z}) is ${block.name}, not a container.`
-  const item = bot.inventory.items().find((i) => i.name === itemName || i.name.includes(itemName))
-  if (!item) return `No "${itemName}" in inventory.`
+  const matches = bot.inventory.items().filter((i) => i.name === itemName || i.name.includes(itemName))
+  if (!matches.length) return `No "${itemName}" in inventory.`
   await bot.pathfinder.goto(new goals.GoalNear(x, y, z, 3))
   const chest = await bot.openContainer(block)
-  const amount = count ? Math.min(count, item.count) : item.count
+  // Default to ALL of the item (summed across every matching stack), not just one.
+  const total = matches.reduce((s, i) => s + i.count, 0)
+  const amount = count ? Math.min(count, total) : total
+  const name = matches[0].name
   try {
-    await chest.deposit(item.type, null, amount)
+    await chest.deposit(matches[0].type, null, amount)
   } catch (e) {
     chest.close()
-    return `Couldn't deposit ${item.name}: ${e.message}`
+    return `Deposited some ${name}, then: ${e.message} (chest may be full).`
   }
   chest.close()
-  return `Deposited ${amount} ${item.name}.`
+  return `Deposited ${amount} ${name}.`
 }
 
 async function withdrawFromChest(bot, { x, y, z, itemName, count = 1 }) {

@@ -154,9 +154,11 @@ async function goToPlayer(bot, { username, range = 2 }) {
 function followPlayer(bot, { username, range = 2 }) {
   const target = bot.players[username]?.entity
   if (!target) return `Can't see player "${username}".`
+  // Follow without modifying the world: no digging or block placing.
+  if (bot.followMovements) bot.pathfinder.setMovements(bot.followMovements)
   bot.pathfinder.setGoal(new goals.GoalFollow(target, range), true)
   bot.gatherUntil = Date.now() + 8000
-  return `Now following ${username}.`
+  return `Now following ${username} (without breaking or placing blocks).`
 }
 
 function stop(bot) {

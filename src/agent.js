@@ -131,6 +131,7 @@ function createAgent(bot) {
     try { bot.pathfinder.setGoal(null) } catch {}
     try { bot.clearControlStates() } catch {}
     try { bot.stopDigging() } catch {}
+    try { if (bot.defaultMovements) bot.pathfinder.setMovements(bot.defaultMovements) } catch {}
 
     return handle(text, from, myRunId, controller.signal).catch((e) => {
       if (myRunId === runId) console.error('[agent error]', e.message)

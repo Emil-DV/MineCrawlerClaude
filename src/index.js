@@ -106,7 +106,14 @@ const bot = mineflayer.createBot({
 bot.loadPlugin(pathfinder)
 
 bot.once('spawn', () => {
-  bot.pathfinder.setMovements(new Movements(bot))
+  // Default movements may dig/place to reach a goal. A second "follow" config does
+  // neither — used by followPlayer so following never modifies the world.
+  bot.defaultMovements = new Movements(bot)
+  bot.followMovements = new Movements(bot)
+  bot.followMovements.canDig = false
+  bot.followMovements.scafoldingBlocks = []
+  bot.followMovements.allow1by1towers = false
+  bot.pathfinder.setMovements(bot.defaultMovements)
   console.log(`Bot spawned as "${bot.username}" (${STANDALONE ? 'standalone' : OLLAMA ? `ollama: ${process.env.OLLAMA_MODEL || 'qwen2.5-coder:7b'}` : 'anthropic'} mode).`)
 
   // Personal space: keep ~1 block of clearance from any other player/bot. Only
@@ -186,6 +193,7 @@ bot.once('spawn', () => {
       try { bot.pathfinder.setGoal(null) } catch {}
       try { bot.clearControlStates() } catch {}
       try { bot.stopDigging() } catch {}
+      try { bot.pathfinder.setMovements(bot.defaultMovements) } catch {} // followPlayer re-restricts
     }
 
     // Run a tool if the first word names one. Returns a result string, or null

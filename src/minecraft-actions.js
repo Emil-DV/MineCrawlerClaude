@@ -143,8 +143,14 @@ async function goTo(bot, { x, y, z }) {
 async function goToPlayer(bot, { username, range = 2 }) {
   const target = bot.players[username]?.entity
   if (!target) return `Can't see player "${username}".`
+  // Come without modifying the world: no digging or block placing.
+  if (bot.followMovements) bot.pathfinder.setMovements(bot.followMovements)
   const p = target.position
-  await bot.pathfinder.goto(new goals.GoalNear(p.x, p.y, p.z, range))
+  try {
+    await bot.pathfinder.goto(new goals.GoalNear(p.x, p.y, p.z, range))
+  } catch (e) {
+    return `Couldn't reach ${username} on foot — no clear path without breaking or placing blocks.`
+  }
   // Let summoned bots gather: pause personal-space briefly so the bot doesn't
   // shove off another bot that arrives next to it.
   bot.gatherUntil = Date.now() + 8000

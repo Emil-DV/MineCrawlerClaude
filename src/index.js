@@ -129,6 +129,10 @@ bot.once('spawn', () => {
   const personalSpace = setInterval(async () => {
     if (keepingDistance || !bot.entity || bot.pathfinder.isMoving()) return
     if (bot.gatherUntil && Date.now() < bot.gatherUntil) return // just summoned — let bots gather
+    // Never disturb an active follow — overriding the goal would stop the bot
+    // from following once it catches up.
+    const g = bot.pathfinder.goal
+    if (g && g.constructor && g.constructor.name === 'GoalFollow') return
     let nearest = null
     let best = Infinity
     for (const p of Object.values(bot.players)) {

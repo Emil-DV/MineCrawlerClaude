@@ -63,6 +63,11 @@ const tools = [
     },
   },
   {
+    name: 'inventory',
+    description: 'Report what the bot is carrying — a readable list of item names and counts.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
     name: 'chat',
     description: 'Send a message in the in-game chat. Use this to talk to players.',
     input_schema: {

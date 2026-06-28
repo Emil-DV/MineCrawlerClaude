@@ -134,6 +134,16 @@ function chat(bot, { message }) {
   return `Said in chat: "${message}"`
 }
 
+function inventory(bot) {
+  const items = bot.inventory.items()
+  if (!items.length) return 'Inventory is empty.'
+  // Consolidate stacks: sum counts per item name.
+  const counts = {}
+  for (const i of items) counts[i.name] = (counts[i.name] || 0) + i.count
+  const list = Object.entries(counts).map(([n, c]) => `${n} x${c}`)
+  return `Inventory (${list.length} type${list.length === 1 ? '' : 's'}): ${list.join(', ')}.`
+}
+
 async function goTo(bot, { x, y, z }) {
   await bot.pathfinder.goto(new goals.GoalBlock(x, y, z))
   const p = bot.entity.position
@@ -1104,6 +1114,7 @@ function deleteWaypoint(bot, { name }) {
 
 module.exports = {
   observe,
+  inventory,
   saveWaypoint,
   tpWaypoint,
   tpMe,

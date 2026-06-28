@@ -876,25 +876,45 @@ function isContainerBlock(block) {
 }
 
 async function depositToChest(bot, { x, y, z, itemName, count }) {
-  const block = bot.blockAt(new Vec3(x, y, z))
-  if (!block) return `No block at (${x}, ${y}, ${z}).`
-  if (!isContainerBlock(block)) return `Block at (${x}, ${y}, ${z}) is ${block.name}, not a container.`
   const matches = bot.inventory.items().filter((i) => i.name === itemName || i.name.includes(itemName))
   if (!matches.length) return `No "${itemName}" in inventory.`
-  await bot.pathfinder.goto(new goals.GoalNear(x, y, z, 3))
-  const chest = await bot.openContainer(block)
-  // Default to ALL of the item (summed across every matching stack), not just one.
-  const total = matches.reduce((s, i) => s + i.count, 0)
-  const amount = count ? Math.min(count, total) : total
+  const itemType = matches[0].type
   const name = matches[0].name
-  try {
-    await chest.deposit(matches[0].type, null, amount)
-  } catch (e) {
-    chest.close()
-    return `Deposited some ${name}, then: ${e.message} (chest may be full).`
+  const invCount = () => bot.inventory.items().filter((i) => i.type === itemType).reduce((s, i) => s + i.count, 0)
+  let remaining = count ? Math.min(count, invCount()) : invCount()
+
+  // Target chests: the given one first (if any), then nearby chests/barrels by distance.
+  const data = mcData(bot)
+  const ids = ['chest', 'trapped_chest', 'barrel'].map((n) => data.blocksByName[n]?.id).filter((v) => v != null)
+  let positions = bot.findBlocks({ matching: ids, maxDistance: 32, count: 24 })
+  positions.sort((a, b) => bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b))
+  if (x != null && y != null && z != null) {
+    positions = positions.filter((p) => !(p.x === x && p.y === y && p.z === z))
+    positions.unshift(new Vec3(x, y, z))
   }
-  chest.close()
-  return `Deposited ${amount} ${name}.`
+  if (!positions.length) return `No chest found nearby.`
+
+  const seq = startSeq(bot)
+  let deposited = 0
+  let chestsUsed = 0
+  for (const pos of positions) {
+    if (remaining <= 0 || preempted(bot, seq)) break
+    const block = bot.blockAt(pos)
+    if (!isContainerBlock(block)) continue
+    await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 3)).catch(() => {})
+    let chest
+    try { chest = await bot.openContainer(block) } catch { continue }
+    const before = invCount()
+    try { await chest.deposit(itemType, null, remaining) } catch { /* chest filled up; take what fit */ }
+    chest.close()
+    await sleep(150)
+    const moved = before - invCount() // measure what actually transferred (handles full chests)
+    if (moved > 0) { deposited += moved; remaining -= moved; chestsUsed++ }
+  }
+
+  if (deposited === 0) return `Couldn't deposit any ${name} (chests full or unreachable).`
+  if (remaining > 0) return `Deposited ${deposited} ${name} across ${chestsUsed} chest(s); ${remaining} left — chests are full.`
+  return `Deposited ${deposited} ${name} across ${chestsUsed} chest(s).`
 }
 
 async function withdrawFromChest(bot, { x, y, z, itemName, count = 1 }) {

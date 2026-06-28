@@ -412,17 +412,17 @@ const tools = [
   },
   {
     name: 'depositToChest',
-    description: 'Put items into a chest (or barrel/shulker) at the given coordinates.',
+    description: 'Deposit items into nearby chests/barrels, starting with the nearest and overflowing to the next nearest when one fills. Coordinates are optional — give them to start at a specific chest. Default deposits all of the item.',
     input_schema: {
       type: 'object',
       properties: {
-        x: { type: 'number' },
+        itemName: { type: 'string' },
+        count: { type: 'number', description: 'How many to deposit. Default: all of it.' },
+        x: { type: 'number', description: 'Optional: chest to start with.' },
         y: { type: 'number' },
         z: { type: 'number' },
-        itemName: { type: 'string' },
-        count: { type: 'number', description: 'How many to deposit. Default: the whole stack.' },
       },
-      required: ['x', 'y', 'z', 'itemName'],
+      required: ['itemName'],
     },
   },
   {

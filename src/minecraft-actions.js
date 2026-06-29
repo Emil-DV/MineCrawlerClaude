@@ -345,6 +345,8 @@ async function mineNearestBlock(bot, { blockName, count = 1 }) {
     await bot.dig(target)
     mined++
   }
+  // Done — nothing left to mine (or count reached). Turn to face the commander.
+  await faceCommander(bot)
   if (mined > 0) return `Mined ${mined} ${blockName}.`
   return `No visible ${blockName} found within range (any nearby may be hidden behind blocks).`
 }
@@ -1113,6 +1115,14 @@ function commanderName() {
   const c = process.env.BOT_COMMANDER
   if (c && c !== '*') return c
   return process.env.MC_OWNER || 'kaikdidk'
+}
+
+// Turn to face the commander (falling back to the nearest player) — e.g. as a
+// "done, what next?" gesture when a task finishes.
+async function faceCommander(bot) {
+  const ent = bot.players[commanderName()]?.entity || nearestPlayer(bot)
+  if (!ent) return
+  try { await bot.lookAt(ent.position.offset(0, ent.eyeHeight || 1.62, 0), true) } catch { /* ignore */ }
 }
 
 function saveWaypoint(bot, { name }) {

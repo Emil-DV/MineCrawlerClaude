@@ -93,6 +93,7 @@ const TOOL_NAME_ALIASES = {
   plant: 'plantField',
   harvest: 'harvestAndCollect',
   replace: 'replaceField',
+  gtw: 'gotoWaypoint',
 }
 function resolveAlias(text, sender) {
   const fn = ALIASES[text.trim().toLowerCase()]

@@ -1223,6 +1223,21 @@ async function tpWaypoint(bot, { name }) {
   return `Couldn't teleport to "${w.name}" — the bot must be opped for /tp (op it in-game or in server/ops.json).`
 }
 
+// Walk (not teleport) to a saved waypoint without modifying the world — no
+// digging or block placing, same restricted movement as come/follow.
+async function gotoWaypoint(bot, { name }) {
+  const w = loadWaypoints()[name.toLowerCase()]
+  if (!w) return `No waypoint named "${name}". Use listWaypoints to see saved ones.`
+  if (bot.followMovements) bot.pathfinder.setMovements(bot.followMovements)
+  try {
+    await bot.pathfinder.goto(new goals.GoalNear(w.x, w.y, w.z, 1))
+  } catch (e) {
+    return `Couldn't walk to "${w.name}" (${w.x}, ${w.y}, ${w.z}) — no clear path without breaking or placing blocks.`
+  }
+  const p = bot.entity.position
+  return `Walked to "${w.name}" (now at ${Math.round(p.x)}, ${Math.round(p.y)}, ${Math.round(p.z)}).`
+}
+
 async function tpMe(bot, { name, username }) {
   const w = loadWaypoints()[name.toLowerCase()]
   if (!w) return `No waypoint named "${name}". Use listWaypoints to see saved ones.`
@@ -1258,6 +1273,7 @@ module.exports = {
   tpXYZ,
   saveWaypoint,
   tpWaypoint,
+  gotoWaypoint,
   tpMe,
   listWaypoints,
   deleteWaypoint,

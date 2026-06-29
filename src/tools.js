@@ -40,6 +40,15 @@ const tools = [
     },
   },
   {
+    name: 'gotoWaypoint',
+    description: 'Walk to a saved waypoint by name (does not teleport), without breaking or placing any blocks.',
+    input_schema: {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    },
+  },
+  {
     name: 'tpMe',
     description: 'Teleport the commander (you) to a saved waypoint by name. Requires the bot to be opped (uses /tp).',
     input_schema: {

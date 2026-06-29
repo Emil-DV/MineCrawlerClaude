@@ -90,6 +90,7 @@ const ALIASES = {
 const TOOL_NAME_ALIASES = {
   mine: 'mineNearestBlock',
   plant: 'plantField',
+  harvest: 'harvestAndCollect',
 }
 function resolveAlias(text, sender) {
   const fn = ALIASES[text.trim().toLowerCase()]

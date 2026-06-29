@@ -904,6 +904,16 @@ async function collectItems(bot, { range = 16 }) {
   return collected ? `Collected ${collected} dropped stack(s).` : `No dropped items within ${range} blocks.`
 }
 
+// Harvest in one step: mine all nearby blocks of a type (the bot walks over most
+// drops and auto-picks them up), then sweep up whatever's left on the ground.
+async function harvestAndCollect(bot, { blockName, count = 64 }) {
+  const seq = startSeq(bot)
+  const mined = await mineNearestBlock(bot, { blockName, count })
+  if (preempted(bot, seq)) return mined // a new command took over — don't keep collecting
+  const collected = await collectItems(bot, { range: 24 })
+  return `${mined} ${collected}`
+}
+
 async function activateBlock(bot, { x, y, z }) {
   const block = bot.blockAt(new Vec3(x, y, z))
   if (!block) return `No block at (${x}, ${y}, ${z}).`
@@ -1198,6 +1208,7 @@ module.exports = {
   eat,
   useItem,
   collectItems,
+  harvestAndCollect,
   activateBlock,
   craftItem,
   depositToChest,

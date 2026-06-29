@@ -408,6 +408,18 @@ const tools = [
     },
   },
   {
+    name: 'harvestAndCollect',
+    description: 'Harvest in one step: mine all nearby blocks of a type (e.g. "pumpkin", "wheat", "melon") and pick up the drops.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        blockName: { type: 'string' },
+        count: { type: 'number', description: 'Max blocks to harvest. Default 64.' },
+      },
+      required: ['blockName'],
+    },
+  },
+  {
     name: 'activateBlock',
     description: 'Right-click / use a block at coordinates: open doors, press buttons, flip levers, open chests, etc.',
     input_schema: {

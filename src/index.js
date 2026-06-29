@@ -79,9 +79,17 @@ const obeys = (username) => COMMANDER === '*' || username.toLowerCase() === COMM
 const ALIASES = {
   'come to me': (sender) => ({ tool: 'goToPlayer', input: { username: sender || OWNER } }),
   'come here': (sender) => ({ tool: 'goToPlayer', input: { username: sender || OWNER } }),
+  come: (sender) => ({ tool: 'goToPlayer', input: { username: sender || OWNER } }),
   'follow me': (sender) => ({ tool: 'followPlayer', input: { username: sender || OWNER } }),
   'look at me': (sender) => ({ tool: 'lookAtMe', input: { username: sender || OWNER } }),
   'chitchat': (sender) => ({ tool: 'chitchat', input: { username: sender || OWNER } }),
+}
+
+// Short names for typed/chatted tool commands that take arguments (e.g. "mine
+// oak_log", "plant wheat_seeds"). Resolved to the real tool in runTool.
+const TOOL_NAME_ALIASES = {
+  mine: 'mineNearestBlock',
+  plant: 'plantField',
 }
 function resolveAlias(text, sender) {
   const fn = ALIASES[text.trim().toLowerCase()]
@@ -227,7 +235,8 @@ bot.once('spawn', () => {
     // Run a tool if the first word names one. Returns a result string, or null
     // if the text isn't a tool invocation.
     const runTool = async (text) => {
-      const [name, ...rest] = text.split(/\s+/)
+      const [typed, ...rest] = text.split(/\s+/)
+      const name = TOOL_NAME_ALIASES[typed.toLowerCase()] || typed
       const tool = tools.find((t) => t.name === name)
       if (!tool) return null
       const parsed = parseToolArgs(tool, rest)

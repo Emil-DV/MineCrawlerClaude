@@ -8,7 +8,9 @@
     "start": "node src/index.js",
     "server:setup": "node scripts/setup-server.mjs",
     "server": "node scripts/start-server.mjs",
-    "test:commands": "node scripts/test-commands.js"
+    "test:commands": "node scripts/test-commands.js",
+    "server:start": "bash scripts/start-server.sh",
+    "server:stop": "bash scripts/stop-server.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

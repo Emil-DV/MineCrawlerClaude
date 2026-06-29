@@ -81,6 +81,7 @@ const ALIASES = {
   'come here': (sender) => ({ tool: 'goToPlayer', input: { username: sender || OWNER } }),
   come: (sender) => ({ tool: 'goToPlayer', input: { username: sender || OWNER } }),
   'follow me': (sender) => ({ tool: 'followPlayer', input: { username: sender || OWNER } }),
+  follow: (sender) => ({ tool: 'followPlayer', input: { username: sender || OWNER } }),
   'look at me': (sender) => ({ tool: 'lookAtMe', input: { username: sender || OWNER } }),
   'chitchat': (sender) => ({ tool: 'chitchat', input: { username: sender || OWNER } }),
 }

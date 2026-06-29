@@ -291,7 +291,7 @@ function lookVector(e) {
   return new Vec3(-Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch))
 }
 
-async function mineNearestBlock(bot, { blockName, count = 1 }) {
+async function mineNearestBlock(bot, { blockName, count = 4096 }) {
   const block = mcData(bot).blocksByName[blockName]
   if (!block) return `Unknown block type "${blockName}".`
 
@@ -984,7 +984,7 @@ async function collectItems(bot, { range = 16 }) {
 
 // Harvest in one step: mine all nearby blocks of a type (the bot walks over most
 // drops and auto-picks them up), then sweep up whatever's left on the ground.
-async function harvestAndCollect(bot, { blockName, count = 64 }) {
+async function harvestAndCollect(bot, { blockName, count = 4096 }) {
   const seq = startSeq(bot)
   const mined = await mineNearestBlock(bot, { blockName, count })
   if (preempted(bot, seq)) return mined // a new command took over — don't keep collecting

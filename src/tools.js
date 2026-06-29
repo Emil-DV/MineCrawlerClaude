@@ -147,7 +147,7 @@ const tools = [
       type: 'object',
       properties: {
         blockName: { type: 'string' },
-        count: { type: 'number', description: 'How many to mine. Default 1.' },
+        count: { type: 'number', description: 'How many to mine. Omit to mine all reachable blocks of this type (it stops when none remain in sight); pass a number to cap it.' },
       },
       required: ['blockName'],
     },
@@ -414,7 +414,7 @@ const tools = [
       type: 'object',
       properties: {
         blockName: { type: 'string' },
-        count: { type: 'number', description: 'Max blocks to harvest. Default 64.' },
+        count: { type: 'number', description: 'Max blocks to harvest. Omit to harvest all of them; pass a number to cap it.' },
       },
       required: ['blockName'],
     },

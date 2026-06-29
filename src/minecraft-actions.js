@@ -565,47 +565,85 @@ async function fillPit(bot) {
   return `Filled the pit with ${placed} ${fillName} up to y=${topY} (${skipped} already solid, ${failed} failed).`
 }
 
+// Ground the bot can hoe straight to farmland.
+const HOEABLE = new Set(['grass_block', 'dirt'])
+
 async function plantField(bot, { seedName }) {
-  const data = mcData(bot)
   const hoe = bot.inventory.items().find((i) => i.name === 'iron_hoe')
   if (!hoe) return `No iron_hoe in inventory.`
   if (!bot.inventory.items().some((i) => i.name === seedName || i.name.includes(seedName))) {
     return `No "${seedName}" in inventory.`
   }
-  const grass = data.blocksByName.grass_block
-  if (!grass) return `This version has no grass_block.`
 
-  const floorY = Math.floor(bot.entity.position.y) - 1 // the level the bot stands on
-  const positions = bot
-    .findBlocks({ matching: grass.id, maxDistance: 16, count: 256 })
-    .filter((p) => p.y === floorY)
-  if (!positions.length) return `No grass blocks at your level (y=${floorY}) within range.`
+  const fy = Math.floor(bot.entity.position.y) // feet level
+  const floorY = fy - 1 // the ground the bot stands on
+  const floorName = (x, z) => bot.blockAt(new Vec3(x, floorY, z))?.name
+  // A wall is anything solid at feet level — it blocks the bot's path and bounds the field.
+  const blocksPath = (x, z) => { const b = bot.blockAt(new Vec3(x, fy, z)); return !!b && b.boundingBox === 'block' }
+  // A field cell: plantable ground below, and walkable (not walled off at feet level).
+  const isField = (x, z) => {
+    const fn = floorName(x, z)
+    return (HOEABLE.has(fn) || fn === 'farmland') && !blocksPath(x, z)
+  }
 
+  // Flood-fill the flat area at the bot's feet, bounded by path-blocking walls.
+  const MAX = 256
+  const bx = Math.floor(bot.entity.position.x), bz = Math.floor(bot.entity.position.z)
+  if (!isField(bx, bz)) return `Stand on the field (plantable ground enclosed by walls) first.`
+  const key = (x, z) => `${x},${z}`
+  const field = new Map([[key(bx, bz), [bx, bz]]])
+  const queue = [[bx, bz]]
+  while (queue.length && field.size <= MAX) {
+    const [x, z] = queue.shift()
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, nz = z + dz
+      if (field.has(key(nx, nz))) continue
+      if (isField(nx, nz)) { field.set(key(nx, nz), [nx, nz]); queue.push([nx, nz]) }
+    }
+  }
+  if (field.size > MAX) return `Field is too large (>${MAX} cells) to plant in one call.`
+
+  // The four corners (bounding box of the field).
+  let minx = Infinity, maxx = -Infinity, minz = Infinity, maxz = -Infinity
+  for (const [x, z] of field.values()) {
+    minx = Math.min(minx, x); maxx = Math.max(maxx, x)
+    minz = Math.min(minz, z); maxz = Math.max(maxz, z)
+  }
+
+  // Work the field row by row in a back-and-forth (boustrophedon) raster.
   const seq = startSeq(bot)
   let tilled = 0, planted = 0, skipped = 0
-  for (const pos of positions) {
-    if (preempted(bot, seq)) return `Hoed ${tilled}, planted ${planted} ${seedName} — stopped.`
-    const above = bot.blockAt(pos.offset(0, 1, 0))
-    if (above && !REPLACEABLE.has(above.name)) { skipped++; continue } // need clear space to plant
-    await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)).catch(() => {})
-    if (above && above.name !== 'air') { try { await bot.dig(above) } catch {} } // clear tall grass etc.
+  for (let x = minx; x <= maxx; x++) {
+    const forward = (x - minx) % 2 === 0
+    for (let i = 0; i <= maxz - minz; i++) {
+      if (preempted(bot, seq)) return `Hoed ${tilled}, planted ${planted} ${seedName} — stopped.`
+      const z = forward ? minz + i : maxz - i
+      if (!field.has(key(x, z))) continue
+      const pos = new Vec3(x, floorY, z)
+      const above = bot.blockAt(new Vec3(x, floorY + 1, z))
+      if (above && !REPLACEABLE.has(above.name)) { skipped++; continue } // no room to plant
+      await bot.pathfinder.goto(new goals.GoalNear(x, floorY, z, 2)).catch(() => {})
+      if (above && above.name !== 'air') { try { await bot.dig(above) } catch {} } // clear tall grass
 
-    // Hoe the grass block into farmland.
-    await bot.equip(hoe, 'hand')
-    await bot.lookAt(pos.offset(0.5, 1, 0.5), true)
-    try { await bot.activateBlock(bot.blockAt(pos)) } catch {}
-    await sleep(150)
-    const farmland = bot.blockAt(pos)
-    if (!farmland || farmland.name !== 'farmland') { skipped++; continue }
-    tilled++
+      let ground = bot.blockAt(pos)
+      if (ground && ground.name !== 'farmland') {
+        await bot.equip(hoe, 'hand')
+        await bot.lookAt(pos.offset(0.5, 1, 0.5), true)
+        try { await bot.activateBlock(bot.blockAt(pos)) } catch {}
+        await sleep(150)
+        ground = bot.blockAt(pos)
+      }
+      if (!ground || ground.name !== 'farmland') { skipped++; continue }
+      tilled++
 
-    // Plant the seed on top of the farmland.
-    const seed = bot.inventory.items().find((i) => i.name === seedName || i.name.includes(seedName))
-    if (!seed) return `Tilled ${tilled}, planted ${planted}, then ran out of ${seedName}.`
-    await bot.equip(seed, 'hand')
-    try { await bot.placeBlock(farmland, new Vec3(0, 1, 0)); planted++ } catch {}
+      const seed = bot.inventory.items().find((i) => i.name === seedName || i.name.includes(seedName))
+      if (!seed) return `Hoed ${tilled}, planted ${planted}, then ran out of ${seedName}.`
+      await bot.equip(seed, 'hand')
+      try { await bot.placeBlock(ground, new Vec3(0, 1, 0)); planted++ } catch {}
+    }
   }
-  return `Hoed ${tilled} grass block(s) and planted ${planted} ${seedName} (${skipped} skipped).`
+  const w = maxx - minx + 1, h = maxz - minz + 1
+  return `Worked the ${w}x${h} field (${field.size} cells): hoed ${tilled}, planted ${planted} ${seedName} (${skipped} skipped).`
 }
 
 async function mineArea(bot, { x1, y1, z1, x2, y2, z2, blockName }) {

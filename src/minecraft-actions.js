@@ -654,6 +654,82 @@ async function plantField(bot, { seedName }) {
   return `Worked the ${w}x${h} field (${field.size} cells): hoed ${tilled}, planted ${planted} ${seedName} (${skipped} skipped).`
 }
 
+// Replace the floor of a field (the flat area at the bot's feet enclosed by
+// path-blocking walls — same boundary logic as plantField) with another block:
+// dig each floor cell and place the new block in its place.
+async function replaceField(bot, { blockName }) {
+  if (!mcData(bot).blocksByName[blockName]) return `Unknown block "${blockName}".`
+  if (!bot.inventory.items().some((i) => i.name === blockName || i.name.includes(blockName))) {
+    return `No "${blockName}" in inventory to place.`
+  }
+
+  const fy = Math.floor(bot.entity.position.y) // feet level
+  const floorY = fy - 1 // the ground the bot stands on
+  const blocksPath = (x, z) => { const b = bot.blockAt(new Vec3(x, fy, z)); return !!b && b.boundingBox === 'block' }
+  // Field cell: any solid floor you can stand on that isn't walled off. Same
+  // wall boundary as plantField; here any floor block counts (we're replacing it).
+  const isCell = (x, z) => {
+    const floor = bot.blockAt(new Vec3(x, floorY, z))
+    return !!floor && floor.boundingBox === 'block' && !blocksPath(x, z)
+  }
+
+  const MAX = 256
+  const bx = Math.floor(bot.entity.position.x), bz = Math.floor(bot.entity.position.z)
+  if (!isCell(bx, bz)) return `Stand on the area (flat floor enclosed by walls) first.`
+  const key = (x, z) => `${x},${z}`
+  const field = new Map([[key(bx, bz), [bx, bz]]])
+  const queue = [[bx, bz]]
+  while (queue.length && field.size <= MAX) {
+    const [x, z] = queue.shift()
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, nz = z + dz
+      if (field.has(key(nx, nz))) continue
+      if (isCell(nx, nz)) { field.set(key(nx, nz), [nx, nz]); queue.push([nx, nz]) }
+    }
+  }
+  if (field.size > MAX) return `Area is too large (>${MAX} cells) to replace in one call.`
+
+  let minx = Infinity, maxx = -Infinity, minz = Infinity, maxz = -Infinity
+  for (const [x, z] of field.values()) {
+    minx = Math.min(minx, x); maxx = Math.max(maxx, x)
+    minz = Math.min(minz, z); maxz = Math.max(maxz, z)
+  }
+
+  const seq = startSeq(bot)
+  let replaced = 0, skipped = 0
+  for (let x = minx; x <= maxx; x++) {
+    const forward = (x - minx) % 2 === 0
+    for (let i = 0; i <= maxz - minz; i++) {
+      if (preempted(bot, seq)) return `Replaced ${replaced} block(s) — stopped.`
+      const z = forward ? minz + i : maxz - i
+      if (!field.has(key(x, z))) continue
+      const pos = new Vec3(x, floorY, z)
+      const cur = bot.blockAt(pos)
+      if (cur && (cur.name === blockName || cur.name.includes(blockName))) { skipped++; continue }
+
+      // Stand on a neighbouring field cell (never this one) so digging the floor
+      // block doesn't drop the bot into the hole it just made.
+      const stand = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+        .map(([dx, dz]) => [x + dx, z + dz])
+        .find(([nx, nz]) => field.has(key(nx, nz)))
+      if (stand) await bot.pathfinder.goto(new goals.GoalNear(stand[0], fy, stand[1], 0)).catch(() => {})
+      else await bot.pathfinder.goto(new goals.GoalNear(x, floorY, z, 2)).catch(() => {})
+
+      // Bail on this cell if we'd be digging the block under our own feet.
+      if (Math.floor(bot.entity.position.x) === x && Math.floor(bot.entity.position.z) === z) { skipped++; continue }
+
+      if (cur && cur.name !== 'air') {
+        try { await bot.lookAt(pos.offset(0.5, 0.5, 0.5), true); await bot.dig(cur) } catch { /* ignore */ }
+      }
+      const r = await placeOne(bot, blockName, pos)
+      if (r === 'placed') replaced++
+      else skipped++
+    }
+  }
+  const w = maxx - minx + 1, h = maxz - minz + 1
+  return `Replaced ${replaced} floor block(s) in the ${w}x${h} area with ${blockName} (${skipped} skipped).`
+}
+
 async function mineArea(bot, { x1, y1, z1, x2, y2, z2, blockName }) {
   const [xa, xb] = [Math.min(x1, x2), Math.max(x1, x2)]
   const [ya, yb] = [Math.min(y1, y2), Math.max(y1, y2)]
@@ -1219,6 +1295,7 @@ module.exports = {
   useItem,
   collectItems,
   harvestAndCollect,
+  replaceField,
   activateBlock,
   craftItem,
   depositToChest,

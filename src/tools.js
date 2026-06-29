@@ -420,6 +420,15 @@ const tools = [
     },
   },
   {
+    name: 'replaceField',
+    description: 'Replace the floor of the field the bot stands on (the flat area enclosed by walls, same boundary as plantField) with another block: digs each floor block and places the given block in its place. Needs the block in inventory.',
+    input_schema: {
+      type: 'object',
+      properties: { blockName: { type: 'string', description: 'The block to lay down, e.g. "cobblestone".' } },
+      required: ['blockName'],
+    },
+  },
+  {
     name: 'activateBlock',
     description: 'Right-click / use a block at coordinates: open doors, press buttons, flip levers, open chests, etc.',
     input_schema: {

@@ -90,6 +90,19 @@ const tools = [
     },
   },
   {
+    name: 'tpXYZ',
+    description: 'Instantly teleport to specific block coordinates (needs the bot to be opped). Use goTo to walk there instead.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        x: { type: 'number' },
+        y: { type: 'number' },
+        z: { type: 'number' },
+      },
+      required: ['x', 'y', 'z'],
+    },
+  },
+  {
     name: 'goToPlayer',
     description: 'Walk to a named player and stop near them.',
     input_schema: {

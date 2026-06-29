@@ -150,6 +150,12 @@ async function goTo(bot, { x, y, z }) {
   return `Arrived near (${Math.round(p.x)}, ${Math.round(p.y)}, ${Math.round(p.z)}).`
 }
 
+// Instant teleport (vs. goTo which walks there). Needs the bot to be opped.
+function tpXYZ(bot, { x, y, z }) {
+  bot.chat(`/tp ${bot.username} ${x} ${y} ${z}`)
+  return `Teleporting to (${x}, ${y}, ${z}).`
+}
+
 async function goToPlayer(bot, { username, range = 2 }) {
   const target = bot.players[username]?.entity
   if (!target) return `Can't see player "${username}".`
@@ -1153,6 +1159,7 @@ function deleteWaypoint(bot, { name }) {
 module.exports = {
   observe,
   inventory,
+  tpXYZ,
   saveWaypoint,
   tpWaypoint,
   tpMe,

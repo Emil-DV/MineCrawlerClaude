@@ -475,17 +475,17 @@ const tools = [
   },
   {
     name: 'withdrawFromChest',
-    description: 'Take items out of a chest (or barrel/shulker) at the given coordinates.',
+    description: 'Take items out of nearby chests/barrels: searches the nearest chest, then the next nearest, etc., gathering the item until it has the requested count. Coordinates are optional (search from a specific chest first).',
     input_schema: {
       type: 'object',
       properties: {
-        x: { type: 'number' },
-        y: { type: 'number' },
-        z: { type: 'number' },
         itemName: { type: 'string' },
         count: { type: 'number', description: 'How many to withdraw. Default 1.' },
+        x: { type: 'number', description: 'Optional: a chest to check first.' },
+        y: { type: 'number' },
+        z: { type: 'number' },
       },
-      required: ['x', 'y', 'z', 'itemName'],
+      required: ['itemName'],
     },
   },
 ]

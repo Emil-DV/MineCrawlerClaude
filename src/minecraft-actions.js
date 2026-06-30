@@ -1068,21 +1068,46 @@ async function depositToChest(bot, { x, y, z, itemName, count }) {
 }
 
 async function withdrawFromChest(bot, { x, y, z, itemName, count = 1 }) {
-  const block = bot.blockAt(new Vec3(x, y, z))
-  if (!block) return `No block at (${x}, ${y}, ${z}).`
-  if (!isContainerBlock(block)) return `Block at (${x}, ${y}, ${z}) is ${block.name}, not a container.`
-  const it = mcData(bot).itemsByName[itemName]
+  const data = mcData(bot)
+  const it = data.itemsByName[itemName] || data.itemsArray.find((i) => i.name.includes(itemName))
   if (!it) return `Unknown item "${itemName}".`
-  await bot.pathfinder.goto(new goals.GoalNear(x, y, z, 3))
-  const chest = await bot.openContainer(block)
-  try {
-    await chest.withdraw(it.id, null, count)
-  } catch (e) {
-    chest.close()
-    return `Couldn't withdraw ${itemName}: ${e.message}`
+  const itemType = it.id
+  const have = () => bot.inventory.items().filter((i) => i.type === itemType).reduce((s, i) => s + i.count, 0)
+
+  // Target chests: the given one first (if any), then nearby chests/barrels by distance.
+  const ids = ['chest', 'trapped_chest', 'barrel'].map((n) => data.blocksByName[n]?.id).filter((v) => v != null)
+  let positions = bot.findBlocks({ matching: ids, maxDistance: 32, count: 24 })
+  positions.sort((a, b) => bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b))
+  if (x != null && y != null && z != null) {
+    positions = positions.filter((p) => !(p.x === x && p.y === y && p.z === z))
+    positions.unshift(new Vec3(x, y, z))
   }
-  chest.close()
-  return `Withdrew ${count} ${itemName}.`
+  if (!positions.length) return `No chest found nearby.`
+
+  const seq = startSeq(bot)
+  let withdrawn = 0
+  let remaining = count
+  let chestsUsed = 0
+  for (const pos of positions) {
+    if (remaining <= 0 || preempted(bot, seq)) break
+    const block = bot.blockAt(pos)
+    if (!isContainerBlock(block)) continue
+    await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 3)).catch(() => {})
+    let chest
+    try { chest = await bot.openContainer(block) } catch { continue }
+    const inChest = chest.containerItems().filter((i) => i.type === itemType).reduce((s, i) => s + i.count, 0)
+    const take = Math.min(remaining, inChest)
+    const before = have()
+    if (take > 0) { try { await chest.withdraw(itemType, null, take) } catch { /* take what fit */ } }
+    chest.close()
+    await sleep(150)
+    const got = have() - before // measure after closing — bot.inventory only updates then
+    if (got > 0) { withdrawn += got; remaining -= got; chestsUsed++ }
+  }
+
+  if (withdrawn === 0) return `Couldn't find any ${it.name} in nearby chests.`
+  if (remaining > 0) return `Withdrew ${withdrawn} ${it.name} from ${chestsUsed} chest(s); ${remaining} more not found nearby.`
+  return `Withdrew ${withdrawn} ${it.name} from ${chestsUsed} chest(s).`
 }
 
 async function boatTo(bot, { x, z }) {

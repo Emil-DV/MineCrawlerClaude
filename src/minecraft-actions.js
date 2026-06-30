@@ -643,8 +643,11 @@ async function fillPit(bot) {
 const HOEABLE = new Set(['grass_block', 'dirt'])
 
 async function plantField(bot, { seedName }) {
-  const hoe = bot.inventory.items().find((i) => i.name === 'iron_hoe')
-  if (!hoe) return `No iron_hoe in inventory.`
+  // Use the best hoe the bot owns (netherite > diamond > iron > stone > gold > wood).
+  const hoes = bot.inventory.items().filter((i) => i.name.endsWith('_hoe'))
+  if (!hoes.length) return `No hoe in inventory.`
+  hoes.sort((a, b) => TOOL_TIERS.indexOf(a.name.split('_')[0]) - TOOL_TIERS.indexOf(b.name.split('_')[0]))
+  const hoe = hoes[0]
   if (!bot.inventory.items().some((i) => i.name === seedName || i.name.includes(seedName))) {
     return `No "${seedName}" in inventory.`
   }

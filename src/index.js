@@ -12,6 +12,23 @@ function printCommands() {
     console.log(`${t.name} ${params.length ? params.join(' ') : '(no args)'}`)
     console.log(`    ${t.description}`)
   }
+
+  // First sentence of a tool's description, capped — a short help string.
+  const shortHelp = (name) => {
+    const t = tools.find((x) => x.name === name)
+    if (!t) return ''
+    return t.description.split('. ')[0].replace(/\.$/, '').slice(0, 80)
+  }
+
+  console.log('\nShortcuts (short name → full command):')
+  for (const [short, long] of Object.entries(TOOL_NAME_ALIASES)) {
+    console.log(`  ${short} → ${long} — ${shortHelp(long)}`)
+  }
+  for (const [phrase, fn] of Object.entries(ALIASES)) {
+    const tool = fn('you').tool
+    console.log(`  "${phrase}" → ${tool} — ${shortHelp(tool)}`)
+  }
+
   console.log('\n(type "??" to show this again)\n')
 }
 

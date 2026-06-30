@@ -302,6 +302,39 @@ function lookVector(e) {
   return new Vec3(-Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch))
 }
 
+// Tool tiers, best first, for picking the highest-grade tool of a kind.
+const TOOL_TIERS = ['netherite', 'diamond', 'iron', 'stone', 'golden', 'wooden']
+
+// Which tool best breaks a block — axe for wood, shovel for soil, pickaxe for
+// stone/ore/metal. null = bare hand is fine (leaves, plants, wool, etc.).
+function toolCategoryForBlock(name) {
+  if (/_log$|_wood$|_planks$|_stem$|_hyphae$|_fence$|_fence_gate$|_door$|_trapdoor$|_sign$|_pressure_plate$|_button$|bookshelf|^chest$|trapped_chest|^barrel$|crafting_table|ladder|bamboo_block|note_block|jukebox|loom|composter|cartography_table|fletching_table|smithing_table|lectern|beehive|bee_nest|mangrove_roots|campfire|^wooden_|_boat$/.test(name)) return 'axe'
+  if (/dirt|grass_block|^sand$|red_sand|gravel|^clay$|soul_sand|soul_soil|^mud$|muddy_mangrove_roots|snow|farmland|dirt_path|podzol|mycelium|coarse_dirt|rooted_dirt/.test(name)) return 'shovel'
+  if (/stone|_ore$|cobble|deepslate|granite|diorite|andesite|obsidian|netherrack|brick|concrete|terracotta|basalt|blackstone|tuff|calcite|amethyst|raw_iron|raw_gold|raw_copper|furnace|anvil|^rail$|_block$|smoker|grindstone|^bell$|cauldron|hopper|spawner|end_stone|purpur|prismarine|magma_block|glowstone|sandstone|quartz|nether_brick|froglight|sculk|copper|ancient_debris/.test(name)) return 'pickaxe'
+  return null
+}
+
+// Equip the best tool of a category ('axe'|'pickaxe'|'shovel'|'sword') if the bot
+// has one and isn't already holding it. Returns whether a tool of that kind exists.
+async function equipBestOfCategory(bot, cat) {
+  const suffix = '_' + cat
+  const tools = bot.inventory.items().filter((i) => i.name.endsWith(suffix))
+  if (!tools.length) return false
+  tools.sort((a, b) => TOOL_TIERS.indexOf(a.name.split('_')[0]) - TOOL_TIERS.indexOf(b.name.split('_')[0]))
+  const best = tools[0]
+  if (!bot.heldItem || bot.heldItem.name !== best.name) {
+    try { await bot.equip(best, 'hand') } catch { /* ignore */ }
+  }
+  return true
+}
+
+// Auto-equip the right tool for a block before digging it.
+async function equipBestToolForBlock(bot, block) {
+  if (!block) return
+  const cat = toolCategoryForBlock(block.name)
+  if (cat) await equipBestOfCategory(bot, cat)
+}
+
 async function mineNearestBlock(bot, { blockName, count = 4096 }) {
   const block = mcData(bot).blocksByName[blockName]
   if (!block) return `Unknown block type "${blockName}".`
@@ -352,6 +385,7 @@ async function mineNearestBlock(bot, { blockName, count = 4096 }) {
     if (!target) break
     await bot.lookAt(pos.offset(0.5, 0.5, 0.5), true) // look toward it as it goes
     await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)).catch(() => {})
+    await equipBestToolForBlock(bot, target) // pickaxe/axe/shovel to suit the block
     if (!bot.canDigBlock(target)) return `Mined ${mined}; can't dig the next ${blockName} (wrong tool?).`
     await bot.dig(target)
     mined++
@@ -366,6 +400,7 @@ async function digBlock(bot, { x, y, z }) {
   const block = bot.blockAt(new Vec3(x, y, z))
   if (!block || block.name === 'air') return `Nothing to mine at (${x}, ${y}, ${z}) (it's air).`
   await bot.pathfinder.goto(new goals.GoalNear(x, y, z, 3)).catch(() => {})
+  await equipBestToolForBlock(bot, block) // pickaxe/axe/shovel to suit the block
   if (!bot.canDigBlock(block)) return `Can't dig ${block.name} at (${x}, ${y}, ${z}) — wrong tool or out of reach.`
   try {
     await bot.dig(block)
@@ -792,6 +827,7 @@ async function mineArea(bot, { x1, y1, z1, x2, y2, z2, blockName }) {
       if (!block || block.name === 'air') { if (pass === 0) empty++; continue }
       if (onlyId != null && block.type !== onlyId) continue
       await bot.pathfinder.goto(new goals.GoalNear(p.x, p.y, p.z, 3)).catch(() => {})
+      await equipBestToolForBlock(bot, block) // pickaxe/axe/shovel to suit the block
       if (!bot.canDigBlock(block)) { retry.push(p); continue }
       await bot.dig(block).catch(() => {})
       if (bot.blockAt(p)?.name === 'air') { mined++; progress++ } else retry.push(p)
@@ -954,6 +990,7 @@ async function attackEntity(bot, { target }) {
 
   let victim = pick()
   if (!victim) return `No ${target || 'mob'} nearby to attack.`
+  await equipBestOfCategory(bot, 'sword') // wield the best sword for the fight
   const id = victim.id
   const name = victim.name || victim.username || 'entity'
 

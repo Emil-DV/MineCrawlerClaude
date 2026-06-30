@@ -1369,15 +1369,29 @@ async function boatTo(bot, { x, z }) {
 
 async function sleepInBed(bot) {
   if (bot.isSleeping) return 'Already sleeping.'
-  const bed = bot.findBlock({ matching: (b) => bot.isABed(b), maxDistance: 32 })
-  if (!bed) return 'No bed found within 32 blocks.'
-  await bot.pathfinder.goto(new goals.GoalNear(bed.position.x, bed.position.y, bed.position.z, 2)).catch(() => {})
-  try {
-    await bot.sleep(bed)
-  } catch (e) {
-    return `Found a bed at (${bed.position.x}, ${bed.position.y}, ${bed.position.z}) but couldn't sleep: ${e.message}.`
+  const beds = bot.findBlocks({ matching: (b) => bot.isABed(b), maxDistance: 32, count: 32 })
+  if (!beds.length) return 'No bed found within 32 blocks.'
+  beds.sort((a, b) => bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b))
+
+  // If a bed is taken, try the next one — at most one bed per online player can be
+  // occupied, so cap the search at the player count.
+  const maxTries = Math.max(1, Object.keys(bot.players).length)
+  let occupied = 0
+  for (let i = 0; i < beds.length && i < maxTries; i++) {
+    const bed = bot.blockAt(beds[i])
+    if (!bed || !bot.isABed(bed)) continue
+    const props = bed.getProperties ? bed.getProperties() : {}
+    if (props.occupied === true || props.occupied === 'true') { occupied++; continue } // taken — skip
+    await bot.pathfinder.goto(new goals.GoalNear(beds[i].x, beds[i].y, beds[i].z, 2)).catch(() => {})
+    try {
+      await bot.sleep(bed)
+      return `Sleeping in the bed at (${beds[i].x}, ${beds[i].y}, ${beds[i].z}).`
+    } catch (e) {
+      if (!/occupied/i.test(e.message)) return `Found a bed but couldn't sleep: ${e.message}.` // other beds won't help
+      occupied++ // someone's in it — try the next bed
+    }
   }
-  return `Sleeping in the bed at (${bed.position.x}, ${bed.position.y}, ${bed.position.z}).`
+  return `Couldn't sleep — every nearby bed (checked ${Math.min(beds.length, maxTries)}) is occupied.`
 }
 
 // --- Named waypoints (persisted to waypoints.json) ---

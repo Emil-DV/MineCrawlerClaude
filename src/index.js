@@ -308,16 +308,21 @@ bot.once('spawn', () => {
       if (!cmd) return // not addressed to this bot
       console.log(`<${username}> ${message}`)
       preempt() // interrupt any running action (so "stop" / new commands take effect now)
-      const aliased = runAliasOrNull(cmd, username)
-      const result = aliased ? await aliased : await runTool(cmd)
-      if (result !== null) {
-        console.log(`  ${result}`)
-        // Report back, split across several messages if long (with a small delay
-        // between them so the server doesn't treat it as spam).
-        const parts = splitForChat(result.replace(/\s+/g, ' '))
-        for (let i = 0; i < parts.length; i++) {
-          if (i) await new Promise((r) => setTimeout(r, 400))
-          bot.chat(`${ECHO} ${parts[i]}`)
+      // Run one or more ";"-separated commands in sequence; stop if a newer command preempts us.
+      const mySeq = bot.cmdSeq
+      for (const part of cmd.split(';').map((s) => s.trim()).filter(Boolean)) {
+        if (bot.cmdSeq !== mySeq) break
+        const aliased = runAliasOrNull(part, username)
+        const result = aliased ? await aliased : await runTool(part)
+        if (result !== null) {
+          console.log(`  ${result}`)
+          // Report back, split across several messages if long (with a small delay
+          // between them so the server doesn't treat it as spam).
+          const parts = splitForChat(result.replace(/\s+/g, ' '))
+          for (let i = 0; i < parts.length; i++) {
+            if (i) await new Promise((r) => setTimeout(r, 400))
+            bot.chat(`${ECHO} ${parts[i]}`)
+          }
         }
       }
     })
@@ -331,10 +336,14 @@ bot.once('spawn', () => {
       if (!text) { rl.prompt(); return }
       if (text === '??' || text === '?' || text === 'help') { printCommands(); rl.prompt(); return }
       preempt() // interrupt any running action
-      const aliased = runAliasOrNull(text)
-      const result = aliased ? await aliased : await runTool(text)
-      if (result !== null) console.log(`  ${result}`)
-      else bot.chat(text) // not a tool → send to server as chat or a /command
+      const mySeq = bot.cmdSeq
+      for (const part of text.split(';').map((s) => s.trim()).filter(Boolean)) {
+        if (bot.cmdSeq !== mySeq) break
+        const aliased = runAliasOrNull(part)
+        const result = aliased ? await aliased : await runTool(part)
+        if (result !== null) console.log(`  ${result}`)
+        else bot.chat(part) // not a tool → send to server as chat or a /command
+      }
       rl.prompt()
     })
     return

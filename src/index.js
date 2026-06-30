@@ -98,6 +98,7 @@ const TOOL_NAME_ALIASES = {
   store: 'depositToChest',
   craft: 'craftItem',
   place: 'placeBlock',
+  equip: 'equipItem',
 }
 function resolveAlias(text, sender) {
   const fn = ALIASES[text.trim().toLowerCase()]

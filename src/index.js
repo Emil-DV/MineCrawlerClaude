@@ -148,13 +148,19 @@ const bot = mineflayer.createBot({
 bot.loadPlugin(pathfinder)
 
 bot.once('spawn', () => {
-  // Default movements may dig/place to reach a goal. A second "follow" config does
-  // neither — used by followPlayer so following never modifies the world.
+  // All pathfinding is non-destructive: the bot never digs or places blocks just
+  // to travel (walking, collecting, going to chests/players/waypoints, moving
+  // between build/mine cells). Task digging/placing still happens explicitly via
+  // bot.dig / bot.placeBlock in the individual commands.
   bot.defaultMovements = new Movements(bot)
-  bot.followMovements = new Movements(bot)
-  bot.followMovements.canDig = false
-  bot.followMovements.scafoldingBlocks = []
-  bot.followMovements.allow1by1towers = false
+  bot.defaultMovements.canDig = false
+  bot.defaultMovements.scafoldingBlocks = []
+  bot.defaultMovements.allow1by1towers = false
+  // followPlayer/goToPlayer/gotoWaypoint reference this; same restricted config.
+  bot.followMovements = bot.defaultMovements
+  // Building is allowed to dig/place to reach a spot (e.g. scaffold up to a high
+  // wall block). placeOne switches to this just for positioning before a place.
+  bot.buildMovements = new Movements(bot)
   // NOTE: canOpenDoors left at the library default (false). mineflayer's pathfinder
   // cannot route through doors on vanilla 1.21.x (verified: stuck at closed doors,
   // "no path" through open ones), and enabling it can degrade other pathing.

@@ -152,7 +152,11 @@ function inventory(bot) {
 }
 
 async function goTo(bot, { x, y, z }) {
-  await bot.pathfinder.goto(new goals.GoalBlock(x, y, z))
+  try {
+    await bot.pathfinder.goto(new goals.GoalBlock(x, y, z))
+  } catch (e) {
+    return `Couldn't walk to (${x}, ${y}, ${z}) — no clear path without breaking or placing blocks.`
+  }
   const p = bot.entity.position
   return `Arrived near (${Math.round(p.x)}, ${Math.round(p.y)}, ${Math.round(p.z)}).`
 }
@@ -347,7 +351,7 @@ async function mineNearestBlock(bot, { blockName, count = 4096 }) {
     const target = bot.blockAt(pos)
     if (!target) break
     await bot.lookAt(pos.offset(0.5, 0.5, 0.5), true) // look toward it as it goes
-    await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2))
+    await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)).catch(() => {})
     if (!bot.canDigBlock(target)) return `Mined ${mined}; can't dig the next ${blockName} (wrong tool?).`
     await bot.dig(target)
     mined++
@@ -361,7 +365,7 @@ async function mineNearestBlock(bot, { blockName, count = 4096 }) {
 async function digBlock(bot, { x, y, z }) {
   const block = bot.blockAt(new Vec3(x, y, z))
   if (!block || block.name === 'air') return `Nothing to mine at (${x}, ${y}, ${z}) (it's air).`
-  await bot.pathfinder.goto(new goals.GoalNear(x, y, z, 3))
+  await bot.pathfinder.goto(new goals.GoalNear(x, y, z, 3)).catch(() => {})
   if (!bot.canDigBlock(block)) return `Can't dig ${block.name} at (${x}, ${y}, ${z}) — wrong tool or out of reach.`
   try {
     await bot.dig(block)
@@ -418,7 +422,12 @@ async function placeOne(bot, blockName, target) {
   }
   if (!reference) return 'no-support'
 
-  await bot.pathfinder.goto(new goals.GoalNear(target.x, target.y, target.z, 3))
+  // Placing may need to dig/scaffold to reach the spot, so use build movements for
+  // positioning (the default is non-destructive). If there's no path, try to place
+  // from where we are anyway.
+  if (bot.buildMovements) bot.pathfinder.setMovements(bot.buildMovements)
+  await bot.pathfinder.goto(new goals.GoalNear(target.x, target.y, target.z, 3)).catch(() => {})
+  if (bot.defaultMovements) bot.pathfinder.setMovements(bot.defaultMovements) // back to non-destructive once positioned
   await bot.equip(item, 'hand')
   try {
     await bot.placeBlock(reference, faceVector)
@@ -887,7 +896,7 @@ async function move(bot, { direction, distance = 1 }) {
   const tx = Math.floor(p.x) + v.x * distance
   const tz = Math.floor(p.z) + v.z * distance
   const ty = Math.floor(p.y)
-  await bot.pathfinder.goto(new goals.GoalNear(tx, ty, tz, 1))
+  await bot.pathfinder.goto(new goals.GoalNear(tx, ty, tz, 1)).catch(() => {})
   const np = bot.entity.position
   return `Moved ${dir} ${distance} → (${Math.round(np.x)}, ${Math.round(np.y)}, ${Math.round(np.z)}).`
 }
@@ -1029,7 +1038,7 @@ async function harvestAndCollect(bot, { blockName, count = 4096 }) {
 async function activateBlock(bot, { x, y, z }) {
   const block = bot.blockAt(new Vec3(x, y, z))
   if (!block) return `No block at (${x}, ${y}, ${z}).`
-  await bot.pathfinder.goto(new goals.GoalNear(x, y, z, 3))
+  await bot.pathfinder.goto(new goals.GoalNear(x, y, z, 3)).catch(() => {})
   await bot.activateBlock(block)
   return `Activated ${block.name} at (${x}, ${y}, ${z}).`
 }
@@ -1047,7 +1056,7 @@ async function craftItem(bot, { itemName, count = 1 }) {
       : `Can't craft ${itemName}: need a crafting table nearby, or missing ingredients.`
   }
   if (table) {
-    await bot.pathfinder.goto(new goals.GoalNear(table.position.x, table.position.y, table.position.z, 3))
+    await bot.pathfinder.goto(new goals.GoalNear(table.position.x, table.position.y, table.position.z, 3)).catch(() => {})
     try { await bot.lookAt(table.position.offset(0.5, 0.5, 0.5), true) } catch { /* face the table */ }
     await sleep(1000) // work at the table a beat so it looks like the bot is crafting
   }

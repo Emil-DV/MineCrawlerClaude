@@ -102,6 +102,7 @@ const TOOL_NAME_ALIASES = {
   collect: 'collectItems',
   hyd: 'healthStatus',
   smelt: 'smeltItem',
+  inv: 'inventory',
 }
 function resolveAlias(text, sender) {
   const fn = ALIASES[text.trim().toLowerCase()]

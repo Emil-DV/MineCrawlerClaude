@@ -1126,7 +1126,7 @@ async function smeltItem(bot, { inputName, count = 1, fuelName }) {
 }
 
 function isContainerBlock(block) {
-  return !!block && /chest|barrel|shulker_box/.test(block.name)
+  return !!block && /chest|barrel|shulker_box|furnace|smoker/.test(block.name)
 }
 
 async function depositToChest(bot, { x, y, z, itemName, count }) {
@@ -1185,15 +1185,16 @@ async function withdrawFromChest(bot, { x, y, z, itemName, count = 1 }) {
   const itemType = it.id
   const have = () => bot.inventory.items().filter((i) => i.type === itemType).reduce((s, i) => s + i.count, 0)
 
-  // Target chests: the given one first (if any), then nearby chests/barrels by distance.
-  const ids = ['chest', 'trapped_chest', 'barrel'].map((n) => data.blocksByName[n]?.id).filter((v) => v != null)
+  // Target containers: the given one first (if any), then nearby ones by distance.
+  // Furnaces/smokers are included so we can grab smelted output too.
+  const ids = ['chest', 'trapped_chest', 'barrel', 'furnace', 'blast_furnace', 'smoker'].map((n) => data.blocksByName[n]?.id).filter((v) => v != null)
   let positions = bot.findBlocks({ matching: ids, maxDistance: 32, count: 24 })
   positions.sort((a, b) => bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b))
   if (x != null && y != null && z != null) {
     positions = positions.filter((p) => !(p.x === x && p.y === y && p.z === z))
     positions.unshift(new Vec3(x, y, z))
   }
-  if (!positions.length) return `No chest found nearby.`
+  if (!positions.length) return `No container found nearby.`
 
   const seq = startSeq(bot)
   let withdrawn = 0
@@ -1204,7 +1205,24 @@ async function withdrawFromChest(bot, { x, y, z, itemName, count = 1 }) {
     const block = bot.blockAt(pos)
     if (!isContainerBlock(block)) continue
     await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 3)).catch(() => {})
-    try { await bot.lookAt(pos.offset(0.5, 0.5, 0.5), true) } catch { /* face the chest */ }
+    try { await bot.lookAt(pos.offset(0.5, 0.5, 0.5), true) } catch { /* face the container */ }
+
+    // Furnaces use a different API — take the matching item from the output slot.
+    if (/furnace|smoker/.test(block.name)) {
+      let furnace
+      try { furnace = await bot.openFurnace(block) } catch { continue }
+      await sleep(CHEST_PAUSE)
+      const before = have()
+      const out = furnace.outputItem()
+      if (out && out.type === itemType) { try { await furnace.takeOutput() } catch { /* nothing ready */ } }
+      await sleep(CHEST_PAUSE)
+      furnace.close()
+      await sleep(150)
+      const got = have() - before
+      if (got > 0) { withdrawn += got; remaining -= got; chestsUsed++ }
+      continue
+    }
+
     let chest
     try { chest = await bot.openContainer(block) } catch { continue }
     await sleep(CHEST_PAUSE) // hold it open a beat so the chest visibly opens
@@ -1219,9 +1237,9 @@ async function withdrawFromChest(bot, { x, y, z, itemName, count = 1 }) {
     if (got > 0) { withdrawn += got; remaining -= got; chestsUsed++ }
   }
 
-  if (withdrawn === 0) return `Couldn't find any ${it.name} in nearby chests.`
-  if (remaining > 0) return `Withdrew ${withdrawn} ${it.name} from ${chestsUsed} chest(s); ${remaining} more not found nearby.`
-  return `Withdrew ${withdrawn} ${it.name} from ${chestsUsed} chest(s).`
+  if (withdrawn === 0) return `Couldn't find any ${it.name} in nearby containers.`
+  if (remaining > 0) return `Withdrew ${withdrawn} ${it.name} from ${chestsUsed} container(s); ${remaining} more not found nearby.`
+  return `Withdrew ${withdrawn} ${it.name} from ${chestsUsed} container(s).`
 }
 
 async function boatTo(bot, { x, z }) {

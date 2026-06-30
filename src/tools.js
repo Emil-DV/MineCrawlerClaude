@@ -203,16 +203,16 @@ const tools = [
   },
   {
     name: 'placeBlock',
-    description: 'Place a single block from the inventory at the given coordinates. Build structures by calling this repeatedly for each block. Needs a solid block already adjacent to place against.',
+    description: 'Place a single block from the inventory. With x/y/z, places at those coordinates; without them, places in the cell just in front of the bot. Needs a solid block already adjacent to place against.',
     input_schema: {
       type: 'object',
       properties: {
         blockName: { type: 'string' },
-        x: { type: 'number' },
+        x: { type: 'number', description: 'Optional. Omit (with y,z) to place just in front of the bot.' },
         y: { type: 'number' },
         z: { type: 'number' },
       },
-      required: ['blockName', 'x', 'y', 'z'],
+      required: ['blockName'],
     },
   },
   {

@@ -419,6 +419,13 @@ async function placeOne(bot, blockName, target) {
 }
 
 async function placeBlock(bot, { blockName, x, y, z }) {
+  // No coordinates given → place in the cell just in front of the bot (foot level).
+  if (x == null || y == null || z == null) {
+    const fwd = FORWARD_BY_DIR[cardinalFromYaw(bot.entity.yaw)]
+    x = Math.floor(bot.entity.position.x) + fwd.x
+    y = Math.floor(bot.entity.position.y)
+    z = Math.floor(bot.entity.position.z) + fwd.z
+  }
   const r = await placeOne(bot, blockName, new Vec3(x, y, z))
   if (r === 'no-item') return `No "${blockName}" in inventory to place.`
   if (r === 'occupied') return `(${x}, ${y}, ${z}) is already occupied.`

@@ -382,7 +382,9 @@ async function equipItem(bot, { itemName }) {
 }
 
 async function dropItem(bot, { itemName, count }) {
-  const item = bot.inventory.items().find((i) => i.name === itemName || i.name.includes(itemName))
+  const items = bot.inventory.items()
+  // Exact name match first (so "beetroot" isn't read as "beetroot_seeds").
+  const item = items.find((i) => i.name === itemName) || items.find((i) => i.name.includes(itemName))
   if (!item) return `No "${itemName}" in inventory.`
   const toDrop = count ? Math.min(count, item.count) : item.count
   await bot.toss(item.type, null, toDrop)
@@ -1055,7 +1057,11 @@ function isContainerBlock(block) {
 }
 
 async function depositToChest(bot, { x, y, z, itemName, count }) {
-  const matches = bot.inventory.items().filter((i) => i.name === itemName || i.name.includes(itemName))
+  const items = bot.inventory.items()
+  // Prefer exact-name stacks (so "beetroot" doesn't deposit "beetroot_seeds");
+  // fall back to a partial match only if there's no exact one.
+  const exact = items.filter((i) => i.name === itemName)
+  const matches = exact.length ? exact : items.filter((i) => i.name.includes(itemName))
   if (!matches.length) return `No "${itemName}" in inventory.`
   const itemType = matches[0].type
   const name = matches[0].name

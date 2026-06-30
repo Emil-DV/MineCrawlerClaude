@@ -372,7 +372,10 @@ async function digBlock(bot, { x, y, z }) {
 }
 
 async function equipItem(bot, { itemName }) {
-  const item = bot.inventory.items().find((i) => i.name === itemName || i.name.includes(itemName))
+  const items = bot.inventory.items()
+  // Prefer an exact name match (so "beetroot" doesn't grab "beetroot_seeds");
+  // fall back to a partial match only if there's no exact one.
+  const item = items.find((i) => i.name === itemName) || items.find((i) => i.name.includes(itemName))
   if (!item) return `No "${itemName}" in inventory.`
   await bot.equip(item, 'hand')
   return `Equipped ${item.name}.`

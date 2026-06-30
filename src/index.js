@@ -99,6 +99,7 @@ const TOOL_NAME_ALIASES = {
   craft: 'craftItem',
   place: 'placeBlock',
   equip: 'equipItem',
+  collect: 'collectItems',
 }
 function resolveAlias(text, sender) {
   const fn = ALIASES[text.trim().toLowerCase()]

@@ -976,17 +976,29 @@ async function useItem(bot) {
 async function collectItems(bot, { range = 16 }) {
   const seq = startSeq(bot)
   let collected = 0
-  while (collected < 50) {
-    if (preempted(bot, seq)) return `Collected ${collected} stack(s) — stopped.`
-    const drop = bot.nearestEntity(
-      (e) => e.name === 'item' && bot.entity.position.distanceTo(e.position) <= range
-    )
-    if (!drop) break
-    await bot.pathfinder.goto(new goals.GoalNear(drop.position.x, drop.position.y, drop.position.z, 1)).catch(() => {})
-    await sleep(300)
-    collected++
+  // Count actual pickups, not visits — so the report is accurate and incidental
+  // pickups (a cluster grabbed at once) are counted too.
+  const onCollect = (collector) => { if (collector === bot.entity) collected++ }
+  bot.on('playerCollect', onCollect)
+  try {
+    const tried = new Set() // items we walked to but couldn't pick up — don't loop on them
+    for (let i = 0; i < 400; i++) { // safety bound
+      if (preempted(bot, seq)) break
+      const drop = bot.nearestEntity(
+        (e) => e.name === 'item' && !tried.has(e.id) && bot.entity.position.distanceTo(e.position) <= range
+      )
+      if (!drop) break
+      const id = drop.id
+      // Stand on the item (range 0) so it's actually picked up, not just approached.
+      await bot.pathfinder.goto(new goals.GoalNear(drop.position.x, drop.position.y, drop.position.z, 0)).catch(() => {})
+      await sleep(200)
+      if (bot.entities[id]) tried.add(id) // still on the ground — unreachable; skip it
+    }
+  } finally {
+    bot.removeListener('playerCollect', onCollect)
   }
-  return collected ? `Collected ${collected} dropped stack(s).` : `No dropped items within ${range} blocks.`
+  if (preempted(bot, seq)) return `Collected ${collected} item stack(s) — stopped.`
+  return collected ? `Collected ${collected} item stack(s).` : `No reachable dropped items within ${range} blocks.`
 }
 
 // Harvest in one step: mine all nearby blocks of a type (the bot walks over most

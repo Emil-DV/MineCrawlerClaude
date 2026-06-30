@@ -120,6 +120,7 @@ const TOOL_NAME_ALIASES = {
   hyd: 'healthStatus',
   smelt: 'smeltItem',
   inv: 'inventory',
+  attack: 'attackEntity',
 }
 function resolveAlias(text, sender) {
   const fn = ALIASES[text.trim().toLowerCase()]

@@ -394,6 +394,9 @@ async function dropItem(bot, { itemName, count }) {
 // Largest number of blocks one bulk-build call will place.
 const MAX_BLOCKS = 512
 
+// How long to keep a chest visibly open (ms) so the open/close looks deliberate.
+const CHEST_PAUSE = 600
+
 // Place one block at a target Vec3. Returns a status code, not a message,
 // so callers can loop over many placements and summarise the result.
 async function placeOne(bot, blockName, target) {
@@ -1043,7 +1046,11 @@ async function craftItem(bot, { itemName, count = 1 }) {
       ? `No craftable recipe for ${itemName} (missing ingredients?).`
       : `Can't craft ${itemName}: need a crafting table nearby, or missing ingredients.`
   }
-  if (table) await bot.pathfinder.goto(new goals.GoalNear(table.position.x, table.position.y, table.position.z, 3))
+  if (table) {
+    await bot.pathfinder.goto(new goals.GoalNear(table.position.x, table.position.y, table.position.z, 3))
+    try { await bot.lookAt(table.position.offset(0.5, 0.5, 0.5), true) } catch { /* face the table */ }
+    await sleep(1000) // work at the table a beat so it looks like the bot is crafting
+  }
   try {
     await bot.craft(recipes[0], count, table || undefined)
   } catch (e) {
@@ -1087,10 +1094,13 @@ async function depositToChest(bot, { x, y, z, itemName, count }) {
     const block = bot.blockAt(pos)
     if (!isContainerBlock(block)) continue
     await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 3)).catch(() => {})
+    try { await bot.lookAt(pos.offset(0.5, 0.5, 0.5), true) } catch { /* face the chest */ }
     let chest
     try { chest = await bot.openContainer(block) } catch { continue }
+    await sleep(CHEST_PAUSE) // hold it open a beat so the chest visibly opens
     const before = invCount()
     try { await chest.deposit(itemType, null, remaining) } catch { /* chest filled up; take what fit */ }
+    await sleep(CHEST_PAUSE) // pause before closing
     chest.close()
     await sleep(150)
     const moved = before - invCount() // measure what actually transferred (handles full chests)
@@ -1128,12 +1138,15 @@ async function withdrawFromChest(bot, { x, y, z, itemName, count = 1 }) {
     const block = bot.blockAt(pos)
     if (!isContainerBlock(block)) continue
     await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 3)).catch(() => {})
+    try { await bot.lookAt(pos.offset(0.5, 0.5, 0.5), true) } catch { /* face the chest */ }
     let chest
     try { chest = await bot.openContainer(block) } catch { continue }
+    await sleep(CHEST_PAUSE) // hold it open a beat so the chest visibly opens
     const inChest = chest.containerItems().filter((i) => i.type === itemType).reduce((s, i) => s + i.count, 0)
     const take = Math.min(remaining, inChest)
     const before = have()
     if (take > 0) { try { await chest.withdraw(itemType, null, take) } catch { /* take what fit */ } }
+    await sleep(CHEST_PAUSE) // pause before closing
     chest.close()
     await sleep(150)
     const got = have() - before // measure after closing — bot.inventory only updates then

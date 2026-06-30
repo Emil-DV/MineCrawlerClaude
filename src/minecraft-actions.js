@@ -134,6 +134,13 @@ function chat(bot, { message }) {
   return `Said in chat: "${message}"`
 }
 
+function healthStatus(bot) {
+  const hp = Math.round(bot.health ?? 0)
+  const food = Math.round(bot.food ?? 0)
+  const mood = hp >= 18 && food >= 16 ? 'Feeling great' : hp >= 10 ? 'Doing okay' : 'Not great'
+  return `${mood} — health ${hp}/20, hunger ${food}/20.`
+}
+
 function inventory(bot) {
   const items = bot.inventory.items()
   if (!items.length) return 'Inventory is empty.'
@@ -1314,6 +1321,7 @@ function deleteWaypoint(bot, { name }) {
 module.exports = {
   observe,
   inventory,
+  healthStatus,
   tpXYZ,
   saveWaypoint,
   tpWaypoint,

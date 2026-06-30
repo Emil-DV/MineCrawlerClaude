@@ -77,6 +77,11 @@ const tools = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'healthStatus',
+    description: "Report how the bot is doing — its current health and hunger.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
     name: 'chat',
     description: 'Send a message in the in-game chat. Use this to talk to players.',
     input_schema: {

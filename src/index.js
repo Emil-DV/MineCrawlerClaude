@@ -100,6 +100,7 @@ const TOOL_NAME_ALIASES = {
   place: 'placeBlock',
   equip: 'equipItem',
   collect: 'collectItems',
+  hyd: 'healthStatus',
 }
 function resolveAlias(text, sender) {
   const fn = ALIASES[text.trim().toLowerCase()]

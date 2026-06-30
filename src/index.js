@@ -94,6 +94,8 @@ const TOOL_NAME_ALIASES = {
   harvest: 'harvestAndCollect',
   replace: 'replaceField',
   gtw: 'gotoWaypoint',
+  grab: 'withdrawFromChest',
+  store: 'depositToChest',
 }
 function resolveAlias(text, sender) {
   const fn = ALIASES[text.trim().toLowerCase()]

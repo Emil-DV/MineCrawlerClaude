@@ -97,6 +97,7 @@ const TOOL_NAME_ALIASES = {
   grab: 'withdrawFromChest',
   store: 'depositToChest',
   craft: 'craftItem',
+  place: 'placeBlock',
 }
 function resolveAlias(text, sender) {
   const fn = ALIASES[text.trim().toLowerCase()]

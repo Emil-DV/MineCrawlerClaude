@@ -434,6 +434,19 @@ const tools = [
     },
   },
   {
+    name: 'smeltItem',
+    description: 'Smelt/cook an item in a nearby furnace (or blast furnace/smoker): loads the input and fuel, waits for it to cook, and takes the output. Needs the input and some fuel (coal, charcoal, planks…) in inventory.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        inputName: { type: 'string', description: 'What to smelt, e.g. "raw_iron", "potato", "sand".' },
+        count: { type: 'number', description: 'How many to smelt. Default 1.' },
+        fuelName: { type: 'string', description: 'Optional fuel to use; otherwise the best fuel in inventory is picked.' },
+      },
+      required: ['inputName'],
+    },
+  },
+  {
     name: 'replaceField',
     description: 'Replace the floor of the field the bot stands on (the flat area enclosed by walls, same boundary as plantField) with another block: digs each floor block and places the given block in its place. Needs the block in inventory.',
     input_schema: {

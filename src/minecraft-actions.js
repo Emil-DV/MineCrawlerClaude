@@ -1059,6 +1059,72 @@ async function craftItem(bot, { itemName, count = 1 }) {
   return `Crafted ${count} ${itemName}.`
 }
 
+// How many items one unit of a given fuel smelts (0 = not a fuel).
+function smeltsPerFuel(name) {
+  const m = { lava_bucket: 100, coal_block: 80, dried_kelp_block: 20, blaze_rod: 12, coal: 8, charcoal: 8, stick: 0.5, bamboo: 0.25 }
+  if (m[name] != null) return m[name]
+  if (/_planks$|_log$|_wood$|_stem$|_hyphae$|_slab$|_stairs$|_fence$|_button$|_sapling$|_door$|sapling$/.test(name)) return 1.5
+  return 0
+}
+
+// Pick a fuel from inventory — the named one if given, else the best available.
+function findFuel(bot, fuelName) {
+  const items = bot.inventory.items()
+  if (fuelName) return items.find((i) => i.name === fuelName) || items.find((i) => i.name.includes(fuelName))
+  for (const p of ['coal', 'charcoal', 'coal_block', 'blaze_rod', 'dried_kelp_block']) {
+    const it = items.find((i) => i.name === p)
+    if (it) return it
+  }
+  return items.find((i) => smeltsPerFuel(i.name) > 0)
+}
+
+async function smeltItem(bot, { inputName, count = 1, fuelName }) {
+  const data = mcData(bot)
+  const items = bot.inventory.items()
+  const input = items.find((i) => i.name === inputName) || items.find((i) => i.name.includes(inputName))
+  if (!input) return `No "${inputName}" in inventory to smelt.`
+  count = Math.min(count, input.count)
+
+  const fuel = findFuel(bot, fuelName)
+  if (!fuel) return `No fuel in inventory (need coal, charcoal, planks, etc.).`
+  const perFuel = smeltsPerFuel(fuel.name)
+  if (perFuel <= 0) return `"${fuel.name}" can't be used as fuel.`
+  const fuelNeeded = Math.min(fuel.count, Math.ceil(count / perFuel))
+
+  const ids = ['furnace', 'blast_furnace', 'smoker'].map((n) => data.blocksByName[n]?.id).filter((v) => v != null)
+  const block = bot.findBlock({ matching: ids, maxDistance: 32 })
+  if (!block) return `No furnace nearby.`
+
+  await bot.pathfinder.goto(new goals.GoalNear(block.position.x, block.position.y, block.position.z, 2)).catch(() => {})
+  try { await bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true) } catch { /* face it */ }
+  let furnace
+  try { furnace = await bot.openFurnace(block) } catch (e) { return `Couldn't open the furnace: ${e.message}` }
+
+  const seq = startSeq(bot)
+  try {
+    await furnace.putFuel(fuel.type, null, fuelNeeded)
+    await furnace.putInput(input.type, null, count)
+  } catch (e) {
+    furnace.close()
+    return `Couldn't load the furnace: ${e.message}`
+  }
+
+  // Smelting takes ~10s per item (blast furnace/smoker are faster). Wait for the
+  // input to be consumed, bailing on a new command or a generous timeout.
+  const deadline = Date.now() + Math.min(count * 11000 + 15000, 360000)
+  while (Date.now() < deadline) {
+    if (preempted(bot, seq)) break
+    await sleep(1000)
+    if (!furnace.inputItem()) { await sleep(500); break } // all input smelted
+  }
+
+  let out = null
+  try { out = await furnace.takeOutput() } catch { /* nothing ready */ }
+  furnace.close()
+  if (out && out.count > 0) return `Smelted ${out.count} ${out.name}.`
+  return `Loaded the furnace (${count} ${input.name} + ${fuelNeeded} ${fuel.name}); still cooking — collect the output later.`
+}
+
 function isContainerBlock(block) {
   return !!block && /chest|barrel|shulker_box/.test(block.name)
 }
@@ -1386,6 +1452,7 @@ module.exports = {
   collectItems,
   harvestAndCollect,
   replaceField,
+  smeltItem,
   activateBlock,
   craftItem,
   depositToChest,

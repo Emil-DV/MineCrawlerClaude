@@ -96,6 +96,7 @@ const TOOL_NAME_ALIASES = {
   gtw: 'gotoWaypoint',
   grab: 'withdrawFromChest',
   store: 'depositToChest',
+  craft: 'craftItem',
 }
 function resolveAlias(text, sender) {
   const fn = ALIASES[text.trim().toLowerCase()]

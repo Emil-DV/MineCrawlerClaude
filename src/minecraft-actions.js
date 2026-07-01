@@ -156,12 +156,15 @@ function healthStatus(bot) {
 
 function inventory(bot) {
   const items = bot.inventory.items()
-  if (!items.length) return 'Inventory is empty.'
+  const total = (bot.inventory.inventoryEnd - bot.inventory.inventoryStart) || 36 // main inventory slots
+  const used = items.length
+  const pct = Math.round((used / total) * 100)
+  if (!items.length) return `Inventory is empty (0% full).`
   // Consolidate stacks: sum counts per item name.
   const counts = {}
   for (const i of items) counts[i.name] = (counts[i.name] || 0) + i.count
   const list = Object.entries(counts).map(([n, c]) => `${n} x${c}`)
-  return `Inventory (${list.length} type${list.length === 1 ? '' : 's'}): ${list.join(', ')}.`
+  return `Inventory ${used}/${total} slots (${pct}% full), ${list.length} type${list.length === 1 ? '' : 's'}: ${list.join(', ')}.`
 }
 
 async function goTo(bot, { x, y, z }) {

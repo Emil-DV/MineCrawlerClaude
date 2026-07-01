@@ -1167,51 +1167,84 @@ function findFuel(bot, fuelName) {
   return items.find((i) => smeltsPerFuel(i.name) > 0)
 }
 
+// If an open furnace is mid-smelt but out of fuel, add enough fuel to finish —
+// from inventory, or from a chest if the bot has none. Returns true if it added.
+async function topUpFuel(bot, furnace) {
+  const cooking = furnace.inputItem()
+  if (!cooking) return false // nothing to finish
+  const fuelSlot = furnace.fuelItem()
+  if (fuelSlot && fuelSlot.count > 0) return false // already fuelled
+  const fuel = findFuel(bot, null) // uses on-hand fuel (smeltItem pre-fetches a buffer)
+  if (!fuel) return false
+  const per = smeltsPerFuel(fuel.name) || 8
+  const need = Math.min(fuel.count, Math.max(1, Math.ceil(cooking.count / per)))
+  try { await furnace.putFuel(fuel.type, null, need); return true } catch { return false }
+}
+
 async function smeltItem(bot, { inputName, count = 1, fuelName }) {
   const data = mcData(bot)
-  const items = bot.inventory.items()
-  const input = items.find((i) => i.name === inputName) || items.find((i) => i.name.includes(inputName))
+  const input = bot.inventory.items().find((i) => i.name === inputName) || bot.inventory.items().find((i) => i.name.includes(inputName))
   if (!input) { bot.missingItem = inputName; return `No "${inputName}" in inventory to smelt.` }
   count = Math.min(count, input.count)
 
-  const fuel = findFuel(bot, fuelName)
-  if (!fuel) return `No fuel in inventory (need coal, charcoal, planks, etc.).`
-  const perFuel = smeltsPerFuel(fuel.name)
-  if (perFuel <= 0) return `"${fuel.name}" can't be used as fuel.`
-  const fuelNeeded = Math.min(fuel.count, Math.ceil(count / perFuel))
+  // Ensure enough fuel up front — for our smelt and to top up other furnaces —
+  // grabbing more from a chest if short. Done here (not mid-loop) because opening a
+  // chest would close an open furnace window.
+  const want = Math.max(1, Math.ceil(count / 8)) + 4 // smelt fuel + a buffer for top-ups
+  const onHand = findFuel(bot, fuelName)
+  if (!onHand || onHand.count < want) {
+    await withdrawFromChest(bot, { itemName: fuelName || 'coal', count: want - (onHand ? onHand.count : 0) })
+  }
 
   const ids = ['furnace', 'blast_furnace', 'smoker'].map((n) => data.blocksByName[n]?.id).filter((v) => v != null)
-  const block = bot.findBlock({ matching: ids, maxDistance: 32 })
-  if (!block) return `No furnace nearby.`
-
-  await bot.pathfinder.goto(new goals.GoalNear(block.position.x, block.position.y, block.position.z, 2)).catch(() => {})
-  try { await bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true) } catch { /* face it */ }
-  let furnace
-  try { furnace = await bot.openFurnace(block) } catch (e) { return `Couldn't open the furnace: ${e.message}` }
+  const positions = bot.findBlocks({ matching: ids, maxDistance: 32, count: 16 })
+  if (!positions.length) return `No furnace nearby.`
+  positions.sort((a, b) => bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b))
 
   const seq = startSeq(bot)
-  try {
-    await furnace.putFuel(fuel.type, null, fuelNeeded)
-    await furnace.putInput(input.type, null, count)
-  } catch (e) {
+  let busy = 0, toppedUp = 0
+  for (let i = 0; i < positions.length && i < 8; i++) {
+    if (preempted(bot, seq)) return `Smelting stopped.`
+    const pos = positions[i]
+    await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)).catch(() => {})
+    try { await bot.lookAt(pos.offset(0.5, 0.5, 0.5), true) } catch { /* face it */ }
+    let furnace
+    try { furnace = await bot.openFurnace(bot.blockAt(pos)) } catch { continue }
+    await sleep(CHEST_PAUSE)
+
+    // Whatever this furnace is cooking, keep it fed so it can finish.
+    if (await topUpFuel(bot, furnace)) toppedUp++
+
+    // Occupied (full) — leave it running and try another furnace.
+    if (furnace.inputItem()) { furnace.close(); busy++; await sleep(200); continue }
+
+    // Free furnace — load and smelt our item here.
+    const fuel = findFuel(bot, fuelName)
+    if (!fuel) { furnace.close(); return `No fuel available (need coal, charcoal, planks…) and none in nearby chests.` }
+    const per = smeltsPerFuel(fuel.name)
+    if (per <= 0) { furnace.close(); return `"${fuel.name}" can't be used as fuel.` }
+    const fuelNeeded = Math.min(fuel.count, Math.ceil(count / per))
+    try {
+      await furnace.putFuel(fuel.type, null, fuelNeeded)
+      await furnace.putInput(input.type, null, count)
+    } catch (e) { furnace.close(); return `Couldn't load the furnace: ${e.message}` }
+
+    // Smelting takes ~10s per item (blast furnace/smoker are faster). Wait for the
+    // input to be consumed, bailing on a new command or a generous timeout.
+    const deadline = Date.now() + Math.min(count * 11000 + 15000, 360000)
+    while (Date.now() < deadline) {
+      if (preempted(bot, seq)) break
+      await sleep(1000)
+      if (!furnace.inputItem()) { await sleep(500); break }
+    }
+    let out = null
+    try { out = await furnace.takeOutput() } catch { /* nothing ready */ }
     furnace.close()
-    return `Couldn't load the furnace: ${e.message}`
+    const extra = toppedUp ? ` (refuelled ${toppedUp} busy furnace${toppedUp === 1 ? '' : 's'})` : ''
+    if (out && out.count > 0) return `Smelted ${out.count} ${out.name}${extra}.`
+    return `Loaded a furnace (${count} ${input.name} + ${fuelNeeded} ${fuel.name}); still cooking${extra}.`
   }
-
-  // Smelting takes ~10s per item (blast furnace/smoker are faster). Wait for the
-  // input to be consumed, bailing on a new command or a generous timeout.
-  const deadline = Date.now() + Math.min(count * 11000 + 15000, 360000)
-  while (Date.now() < deadline) {
-    if (preempted(bot, seq)) break
-    await sleep(1000)
-    if (!furnace.inputItem()) { await sleep(500); break } // all input smelted
-  }
-
-  let out = null
-  try { out = await furnace.takeOutput() } catch { /* nothing ready */ }
-  furnace.close()
-  if (out && out.count > 0) return `Smelted ${out.count} ${out.name}.`
-  return `Loaded the furnace (${count} ${input.name} + ${fuelNeeded} ${fuel.name}); still cooking — collect the output later.`
+  return `All ${busy} nearby furnace${busy === 1 ? '' : 's'} busy smelting${toppedUp ? ` (refuelled ${toppedUp} that needed it)` : ''} — try again once one frees up.`
 }
 
 // Play a music disc in the nearest jukebox: fetch the disc from a chest if the bot

@@ -452,7 +452,7 @@ async function equipItem(bot, { itemName }) {
   // Prefer an exact name match (so "beetroot" doesn't grab "beetroot_seeds");
   // fall back to a partial match only if there's no exact one.
   const item = items.find((i) => i.name === itemName) || items.find((i) => i.name.includes(itemName))
-  if (!item) return `No "${itemName}" in inventory.`
+  if (!item) { bot.missingItem = itemName; return `No "${itemName}" in inventory.` }
   await bot.equip(item, 'hand')
   return `Equipped ${item.name}.`
 }
@@ -477,7 +477,7 @@ const CHEST_PAUSE = 600
 // so callers can loop over many placements and summarise the result.
 async function placeOne(bot, blockName, target) {
   const item = bot.inventory.items().find((i) => i.name === blockName || i.name.includes(blockName))
-  if (!item) return 'no-item'
+  if (!item) { bot.missingItem = blockName; return 'no-item' }
   const existing = bot.blockAt(target)
   if (existing && !REPLACEABLE.has(existing.name)) return 'occupied'
 
@@ -600,6 +600,7 @@ async function fillPit(bot) {
   if (!floor || REPLACEABLE.has(floor.name)) return `Not standing on a solid block — nothing to match.`
   const fillName = floor.name
   if (!bot.inventory.items().some((i) => i.name === fillName || i.name.includes(fillName))) {
+    bot.missingItem = fillName
     return `No "${fillName}" in inventory to fill the pit with.`
   }
 
@@ -686,6 +687,7 @@ async function plantField(bot, { seedName }) {
   hoes.sort((a, b) => TOOL_TIERS.indexOf(a.name.split('_')[0]) - TOOL_TIERS.indexOf(b.name.split('_')[0]))
   const hoe = hoes[0]
   if (!bot.inventory.items().some((i) => i.name === seedName || i.name.includes(seedName))) {
+    bot.missingItem = seedName
     return `No "${seedName}" in inventory.`
   }
 
@@ -751,7 +753,7 @@ async function plantField(bot, { seedName }) {
       tilled++
 
       const seed = bot.inventory.items().find((i) => i.name === seedName || i.name.includes(seedName))
-      if (!seed) return `Hoed ${tilled}, planted ${planted}, then ran out of ${seedName}.`
+      if (!seed) { bot.missingItem = seedName; return `Hoed ${tilled}, planted ${planted}, then ran out of ${seedName}.` }
       await bot.equip(seed, 'hand')
       try { await bot.placeBlock(ground, new Vec3(0, 1, 0)); planted++ } catch {}
     }
@@ -766,6 +768,7 @@ async function plantField(bot, { seedName }) {
 async function replaceField(bot, { blockName }) {
   if (!mcData(bot).blocksByName[blockName]) return `Unknown block "${blockName}".`
   if (!bot.inventory.items().some((i) => i.name === blockName || i.name.includes(blockName))) {
+    bot.missingItem = blockName
     return `No "${blockName}" in inventory to place.`
   }
 
@@ -1168,7 +1171,7 @@ async function smeltItem(bot, { inputName, count = 1, fuelName }) {
   const data = mcData(bot)
   const items = bot.inventory.items()
   const input = items.find((i) => i.name === inputName) || items.find((i) => i.name.includes(inputName))
-  if (!input) return `No "${inputName}" in inventory to smelt.`
+  if (!input) { bot.missingItem = inputName; return `No "${inputName}" in inventory to smelt.` }
   count = Math.min(count, input.count)
 
   const fuel = findFuel(bot, fuelName)

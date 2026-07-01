@@ -309,6 +309,67 @@ bot.once('spawn', () => {
       }
     }
 
+    // The main item a command consumes (+ how many), for pre-fetching from chests.
+    const requiredItem = (cmd) => {
+      const [typed, ...rest] = cmd.trim().split(/\s+/)
+      const name = TOOL_NAME_ALIASES[typed.toLowerCase()] || typed
+      const tool = tools.find((t) => t.name === name)
+      if (!tool) return null
+      const parsed = parseToolArgs(tool, rest)
+      if (parsed.error) return null
+      const v = parsed.value
+      const box = (a, b) => Math.abs(a - b) + 1
+      const fin = (n) => (Number.isFinite(n) ? n : 1)
+      switch (name) {
+        case 'placeBlock': return { name: v.blockName, count: 1 }
+        case 'plantField': return { name: v.seedName, count: 1 }
+        case 'replaceField': return { name: v.blockName, count: 1 }
+        case 'smeltItem': return { name: v.inputName, count: v.count || 1 }
+        case 'fillArea': return { name: v.blockName, count: fin(box(v.x2, v.x1) * box(v.y2, v.y1) * box(v.z2, v.z1)) }
+        case 'buildWall': return { name: v.blockName, count: fin((v.length || 1) * (v.height || 1)) }
+        default: return null
+      }
+    }
+
+    const runOne = (part, username) => runAliasOrNull(part, username) || runTool(part)
+
+    // Withdraw an item from a chest. Returns whether we got any.
+    const fetchMissing = async (name, count) => {
+      const got = await dispatch(bot, 'withdrawFromChest', { itemName: name, count: count || 64 })
+      console.log(`  [fetch ${name}] ${got}`)
+      return !/Couldn't find|No container|Unknown item/.test(String(got))
+    }
+
+    // Run a command; if it reports a missing item, grab it from a chest, walk back
+    // to where we were, and re-run (build/plant/etc. skip work already done).
+    const runWithFetch = async (part, username) => {
+      const home = bot.entity.position.clone()
+      bot.missingItem = null
+      let result = await runOne(part, username)
+      let tries = 0
+      while (bot.missingItem && tries++ < 3) {
+        const need = bot.missingItem
+        bot.missingItem = null
+        if (!(await fetchMissing(need, 64))) break // couldn't get it — give up
+        await bot.pathfinder.goto(new goals.GoalNear(Math.floor(home.x), Math.floor(home.y), Math.floor(home.z), 1)).catch(() => {})
+        result = await runOne(part, username)
+      }
+      return result
+    }
+
+    // Before a batch, pre-fetch every command's main item so it's all on hand.
+    const gatherFor = async (parts) => {
+      const need = {}
+      for (const part of parts) {
+        const r = requiredItem(part)
+        if (r && r.name) need[r.name] = Math.max(need[r.name] || 0, r.count || 1)
+      }
+      for (const [name, count] of Object.entries(need)) {
+        const have = bot.inventory.items().filter((i) => i.name === name || i.name.includes(name)).reduce((s, i) => s + i.count, 0)
+        if (have < count) await fetchMissing(name, count - have)
+      }
+    }
+
     // Drive the bot via chat addressed to it: "[BotA] goTo 10 64 20" or "[all] come here".
     // Chat without a matching [name]/[all] prefix is ignored.
     bot.on('chat', async (username, message) => {
@@ -321,10 +382,11 @@ bot.once('spawn', () => {
       preempt() // interrupt any running action (so "stop" / new commands take effect now)
       // Run one or more ";"-separated commands in sequence; stop if a newer command preempts us.
       const mySeq = bot.cmdSeq
-      for (const part of cmd.split(';').map((s) => s.trim()).filter(Boolean)) {
+      const batch = cmd.split(';').map((s) => s.trim()).filter(Boolean)
+      await gatherFor(batch) // pre-fetch the items the batch will consume
+      for (const part of batch) {
         if (bot.cmdSeq !== mySeq) break
-        const aliased = runAliasOrNull(part, username)
-        const result = aliased ? await aliased : await runTool(part)
+        const result = await runWithFetch(part, username)
         if (result !== null) {
           console.log(`  ${result}`)
           // Report back, split across several messages if long (with a small delay
@@ -348,10 +410,11 @@ bot.once('spawn', () => {
       if (text === '??' || text === '?' || text === 'help') { printCommands(); rl.prompt(); return }
       preempt() // interrupt any running action
       const mySeq = bot.cmdSeq
-      for (const part of text.split(';').map((s) => s.trim()).filter(Boolean)) {
+      const batch = text.split(';').map((s) => s.trim()).filter(Boolean)
+      await gatherFor(batch) // pre-fetch the items the batch will consume
+      for (const part of batch) {
         if (bot.cmdSeq !== mySeq) break
-        const aliased = runAliasOrNull(part)
-        const result = aliased ? await aliased : await runTool(part)
+        const result = await runWithFetch(part)
         if (result !== null) console.log(`  ${result}`)
         else bot.chat(part) // not a tool → send to server as chat or a /command
       }

@@ -357,6 +357,7 @@ async function mineNearestBlock(bot, { blockName, count = 4096 }) {
   const scan = () => bot.findBlocks({ matching: block.id, maxDistance: 48, count: 64, useExtraInfo: (b) => bot.canSeeBlock(b) })
 
   let mined = 0
+  let approaches = 0 // times we've walked toward hidden ore without mining — a loop backstop
   for (let i = 0; i < count; i++) {
     if (preempted(bot, seq)) return `Mined ${mined} ${blockName} — stopped.`
     // Re-scanned each loop, so blocks exposed by earlier digging become eligible.
@@ -373,7 +374,27 @@ async function mineNearestBlock(bot, { blockName, count = 4096 }) {
         await sleep(200)
       }
       positions = scan()
-      if (!positions.length) break // looked everywhere, still nothing visible
+      if (!positions.length) {
+        // Nothing in sight even after looking. If there's ore we can detect but not
+        // see (buried/behind blocks), walk as close as the terrain allows — without
+        // digging — to try to expose it, then re-scan. Give up only when we can't
+        // get any nearer (or after too many fruitless approaches).
+        const hidden = bot.findBlocks({ matching: block.id, maxDistance: 48, count: 64 })
+        if (!hidden.length || ++approaches > 20) break
+        hidden.sort((a, b) => bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b))
+        const h = hidden[0]
+        const before = bot.entity.position.distanceTo(h)
+        for (const r of [2, 8]) { // smallest reachable range = as close as possible
+          if (preempted(bot, seq)) return `Mined ${mined} ${blockName} — stopped.`
+          try { await bot.pathfinder.goto(new goals.GoalNear(h.x, h.y, h.z, r)); break } catch { /* try wider */ }
+        }
+        if (preempted(bot, seq)) return `Mined ${mined} ${blockName} — stopped.`
+        positions = scan()
+        if (!positions.length) {
+          if (before - bot.entity.position.distanceTo(h) < 1) break // couldn't get closer
+          continue // got closer — re-scan next loop (it may be visible now)
+        }
+      }
     }
 
     // Order by alignment with the nearest player's gaze (what they're looking at

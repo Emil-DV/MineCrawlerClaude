@@ -237,14 +237,23 @@ bot.once('spawn', () => {
   }, 200)
   bot.once('end', () => clearInterval(swimUp))
 
-  // Idle liveliness: every ~5-7s, glance in a new direction while standing around,
-  // so the bot doesn't stare blankly. Skipped while it's busy (walking, following,
-  // or digging) so it never turns away from an active task.
-  let nextGlance = Date.now() + 5000
+  // Idle liveliness: once the bot has been standing still for 30s, glance in a new
+  // direction every ~5-7s so it doesn't stare blankly. Any movement (walking,
+  // following, digging, being pushed) resets the 30s timer, so it never turns away
+  // from an active task and only looks around after it's settled.
+  let lastMoved = Date.now()
+  let lastPos = null
+  let nextGlance = 0
   const idleLook = setInterval(() => {
-    if (!bot.entity || Date.now() < nextGlance) return
+    if (!bot.entity) return
+    const pos = bot.entity.position
+    const busy = bot.pathfinder.isMoving() || bot.pathfinder.goal || bot.targetDigBlock ||
+      (lastPos && pos.distanceTo(lastPos) > 0.05)
+    lastPos = pos.clone()
+    if (busy) { lastMoved = Date.now(); return } // reset the settle timer while active
+    if (Date.now() - lastMoved < 30000) return // wait 30s after moving before looking around
+    if (Date.now() < nextGlance) return
     nextGlance = Date.now() + 5000 + Math.random() * 2000 // next glance in 5-7s
-    if (bot.pathfinder.isMoving() || bot.pathfinder.goal || bot.targetDigBlock) return
     const yaw = Math.random() * Math.PI * 2
     const pitch = (Math.random() - 0.5) * 0.6 // mostly level, a little up/down
     bot.look(yaw, pitch, false).catch(() => {})

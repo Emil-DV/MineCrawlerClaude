@@ -434,6 +434,15 @@ const tools = [
     },
   },
   {
+    name: 'playDisc',
+    description: 'Play a music disc in the nearest jukebox. Fetches the disc from a nearby chest if needed, ejects and collects any disc already in the jukebox, then inserts the requested one. Disc name can be short (e.g. "pigstep", "cat", "13") or full ("music_disc_pigstep").',
+    input_schema: {
+      type: 'object',
+      properties: { disc: { type: 'string', description: 'The disc to play, e.g. "pigstep".' } },
+      required: ['disc'],
+    },
+  },
+  {
     name: 'smeltItem',
     description: 'Smelt/cook an item in a nearby furnace (or blast furnace/smoker): loads the input and fuel, waits for it to cook, and takes the output. Needs the input and some fuel (coal, charcoal, planks…) in inventory.',
     input_schema: {

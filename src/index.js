@@ -121,6 +121,7 @@ const TOOL_NAME_ALIASES = {
   smelt: 'smeltItem',
   inv: 'inventory',
   attack: 'attackEntity',
+  play: 'playDisc',
 }
 function resolveAlias(text, sender) {
   const fn = ALIASES[text.trim().toLowerCase()]

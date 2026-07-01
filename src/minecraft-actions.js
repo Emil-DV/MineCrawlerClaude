@@ -1174,6 +1174,45 @@ async function smeltItem(bot, { inputName, count = 1, fuelName }) {
   return `Loaded the furnace (${count} ${input.name} + ${fuelNeeded} ${fuel.name}); still cooking — collect the output later.`
 }
 
+// Play a music disc in the nearest jukebox: fetch the disc from a chest if the bot
+// isn't already carrying it, eject and collect any disc already in the jukebox,
+// then insert the requested one.
+async function playDisc(bot, { disc }) {
+  const data = mcData(bot)
+  let name = disc.startsWith('music_disc_') ? disc : 'music_disc_' + disc
+  let def = data.itemsByName[name] || data.itemsArray.find((i) => i.name.startsWith('music_disc_') && i.name.includes(disc))
+  if (!def) return `Unknown music disc "${disc}".`
+  name = def.name
+
+  // Make sure the bot is holding the disc — grab it from a nearby chest if not.
+  let have = bot.inventory.items().find((i) => i.name === name)
+  if (!have) {
+    await withdrawFromChest(bot, { itemName: name, count: 1 })
+    have = bot.inventory.items().find((i) => i.name === name)
+    if (!have) return `Couldn't find ${name} in inventory or nearby chests.`
+  }
+
+  const jukebox = bot.findBlock({ matching: data.blocksByName.jukebox?.id, maxDistance: 32 })
+  if (!jukebox) return `No jukebox nearby.`
+  await bot.pathfinder.goto(new goals.GoalNear(jukebox.position.x, jukebox.position.y, jukebox.position.z, 2)).catch(() => {})
+  await bot.lookAt(jukebox.position.offset(0.5, 0.5, 0.5), true)
+
+  // If it already holds a disc, eject it and pick the old one up off the ground.
+  const props = jukebox.getProperties ? jukebox.getProperties() : {}
+  if (props.has_record === true || props.has_record === 'true') {
+    try { await bot.activateBlock(bot.blockAt(jukebox.position)) } catch { /* ignore */ }
+    await sleep(700)
+    await collectItems(bot, { range: 6 }) // this walks off to grab the popped disc...
+    await bot.pathfinder.goto(new goals.GoalNear(jukebox.position.x, jukebox.position.y, jukebox.position.z, 2)).catch(() => {}) // ...so return to the jukebox
+    await bot.lookAt(jukebox.position.offset(0.5, 0.5, 0.5), true)
+  }
+
+  // Insert the requested disc.
+  await bot.equip(have, 'hand')
+  try { await bot.activateBlock(bot.blockAt(jukebox.position)) } catch (e) { return `Couldn't load the disc: ${e.message}` }
+  return `Playing "${name.replace('music_disc_', '')}" in the jukebox.`
+}
+
 function isContainerBlock(block) {
   return !!block && /chest|barrel|shulker_box|furnace|smoker/.test(block.name)
 }
@@ -1534,6 +1573,7 @@ module.exports = {
   harvestAndCollect,
   replaceField,
   smeltItem,
+  playDisc,
   activateBlock,
   craftItem,
   depositToChest,

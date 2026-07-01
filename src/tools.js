@@ -82,6 +82,14 @@ const tools = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'wait',
+    description: 'Pause for a number of seconds. Useful between ";"-separated commands to space them out (e.g. "come here; wait 5; follow me").',
+    input_schema: {
+      type: 'object',
+      properties: { seconds: { type: 'number', description: 'Seconds to wait. Default 1.' } },
+    },
+  },
+  {
     name: 'chat',
     description: 'Send a message in the in-game chat. Use this to talk to players.',
     input_schema: {

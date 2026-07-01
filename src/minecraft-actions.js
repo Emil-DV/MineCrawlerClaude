@@ -134,6 +134,19 @@ function chat(bot, { message }) {
   return `Said in chat: "${message}"`
 }
 
+// Pause for a number of seconds — handy between ";"-separated commands. Cut short
+// if a new command comes in.
+async function wait(bot, { seconds = 1 }) {
+  const seq = startSeq(bot)
+  const total = Math.max(0, Math.min(Number(seconds) || 0, 300)) // cap at 5 min
+  const end = Date.now() + total * 1000
+  while (Date.now() < end) {
+    if (preempted(bot, seq)) return `Waited — interrupted by a new command.`
+    await sleep(Math.min(200, end - Date.now()))
+  }
+  return `Waited ${total}s.`
+}
+
 function healthStatus(bot) {
   const hp = Math.round(bot.health ?? 0)
   const food = Math.round(bot.food ?? 0)
@@ -1530,6 +1543,7 @@ module.exports = {
   observe,
   inventory,
   healthStatus,
+  wait,
   tpXYZ,
   saveWaypoint,
   tpWaypoint,

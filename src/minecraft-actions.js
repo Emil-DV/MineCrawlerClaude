@@ -1250,6 +1250,60 @@ async function playDisc(bot, { disc }) {
   return `Playing "${name.replace('music_disc_', '')}" in the jukebox.`
 }
 
+// Trade with a nearby villager or wandering trader. With no item, lists the
+// offers; with an item name, buys it `times` times (paying from inventory).
+async function trade(bot, { itemName, times = 1 }) {
+  const trader = bot.nearestEntity((e) => (e.name === 'villager' || e.name === 'wandering_trader') && bot.entity.position.distanceTo(e.position) <= 12)
+  if (!trader) return 'No villager or wandering trader nearby.'
+  await bot.pathfinder.goto(new goals.GoalNear(trader.position.x, trader.position.y, trader.position.z, 2)).catch(() => {})
+  let villager
+  // mineflayer's openVillager asserts the entity is a "villager"; a wandering
+  // trader uses the same merchant window, so spoof the type past that one check.
+  const villagerType = mcData(bot).entitiesByName.villager?.id
+  const origType = trader.entityType
+  if (villagerType != null) trader.entityType = villagerType
+  try { villager = await bot.openVillager(trader) }
+  catch (e) { return `Couldn't open the trader: ${e.message}` }
+  finally { trader.entityType = origType }
+  const trades = villager.trades || []
+  const fmt = (it) => (it && it.type != null ? `${it.count} ${it.name}` : null)
+  const costOf = (t) => [t.inputItem1, t.hasItem2 ? t.inputItem2 : null].map(fmt).filter(Boolean).join(' + ')
+
+  // No item → just report what's on offer.
+  if (!itemName) {
+    villager.close()
+    if (!trades.length) return 'The trader has no trades.'
+    return `Trader offers: ${trades.map((t) => `${fmt(t.outputItem)} for ${costOf(t)}${t.tradeDisabled ? ' (out of stock)' : ''}`).join('; ')}.`
+  }
+
+  // Find the trade selling itemName (exact name first, then partial), still in stock.
+  let idx = trades.findIndex((t) => t.outputItem && t.outputItem.name === itemName && !t.tradeDisabled)
+  if (idx < 0) idx = trades.findIndex((t) => t.outputItem && t.outputItem.name.includes(itemName) && !t.tradeDisabled)
+  if (idx < 0) {
+    villager.close()
+    const exists = trades.some((t) => t.outputItem && t.outputItem.name.includes(itemName))
+    return exists ? `The trader's "${itemName}" trade is out of stock.` : `The trader doesn't sell "${itemName}".`
+  }
+  const t = trades[idx]
+  const avail = t.maximumNbTradeUses != null && t.nbTradeUses != null ? t.maximumNbTradeUses - t.nbTradeUses : times
+  times = Math.max(1, Math.min(times, avail))
+
+  // Make sure we can pay for it.
+  const costs = [t.inputItem1, t.hasItem2 ? t.inputItem2 : null].filter((x) => x && x.type != null)
+  for (const c of costs) {
+    const have = bot.inventory.items().filter((i) => i.type === c.type).reduce((s, i) => s + i.count, 0)
+    if (have < c.count * times) { villager.close(); return `Not enough ${c.name}: need ${c.count * times}, have ${have}.` }
+  }
+  try {
+    await bot.trade(villager, idx, times)
+  } catch (e) {
+    villager.close()
+    return `Trade failed: ${e.message}`
+  }
+  villager.close()
+  return `Traded for ${t.outputItem.count * times} ${t.outputItem.name} (paid ${costs.map((c) => `${c.count * times} ${c.name}`).join(' + ')}).`
+}
+
 function isContainerBlock(block) {
   return !!block && /chest|barrel|shulker_box|furnace|smoker/.test(block.name)
 }
@@ -1612,6 +1666,7 @@ module.exports = {
   replaceField,
   smeltItem,
   playDisc,
+  trade,
   activateBlock,
   craftItem,
   depositToChest,

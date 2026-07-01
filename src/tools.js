@@ -442,6 +442,17 @@ const tools = [
     },
   },
   {
+    name: 'trade',
+    description: 'Trade with a nearby villager or wandering trader. With no item name, lists what it offers; with an item name, buys that item (paying emeralds/items from inventory) the given number of times.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        itemName: { type: 'string', description: 'The item to buy (omit to just list the offers).' },
+        times: { type: 'number', description: 'How many times to make the trade. Default 1.' },
+      },
+    },
+  },
+  {
     name: 'playDisc',
     description: 'Play a music disc in the nearest jukebox. Fetches the disc from a nearby chest if needed, ejects and collects any disc already in the jukebox, then inserts the requested one. Disc name can be short (e.g. "pigstep", "cat", "13") or full ("music_disc_pigstep").',
     input_schema: {

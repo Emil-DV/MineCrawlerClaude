@@ -260,6 +260,28 @@ bot.once('spawn', () => {
   }, 1000)
   bot.once('end', () => clearInterval(idleLook))
 
+  // Auto-eat: when hunger runs low, eat food from inventory so the bot doesn't
+  // starve (starving to death drops its whole inventory). Skips golden apples so
+  // it doesn't waste them, and restores whatever it was holding afterward.
+  let eating = false
+  const autoEat = setInterval(async () => {
+    if (eating || !bot.entity || bot.food == null || bot.food > 16 || bot.targetDigBlock) return
+    const foods = bot.registry && bot.registry.foodsByName
+    if (!foods) return
+    const food = bot.inventory.items().find((i) => foods[i.name] && !/golden_apple/.test(i.name))
+    if (!food) return
+    eating = true
+    const prev = bot.heldItem
+    try {
+      await bot.equip(food, 'hand')
+      await bot.consume()
+      console.log(`[auto-eat] ate ${food.name}; hunger now ${bot.food}/20`)
+      if (prev && prev.type !== food.type) { try { await bot.equip(prev, 'hand') } catch { /* ignore */ } }
+    } catch { /* interrupted or couldn't eat */ }
+    eating = false
+  }, 2000)
+  bot.once('end', () => clearInterval(autoEat))
+
   // If text is a phrase alias (e.g. "come to me"), run its tool and return the
   // result promise; otherwise return null so normal handling proceeds.
   const runAliasOrNull = (text, sender) => {

@@ -1054,10 +1054,10 @@ async function attackEntity(bot, { target }) {
 }
 
 async function eat(bot, { foodName }) {
-  const foods = mcData(bot).foods
+  const foods = mcData(bot).foodsByName // keyed by item name (foods[] is keyed by a food id, not item id)
   const item = foodName
     ? bot.inventory.items().find((i) => i.name === foodName || i.name.includes(foodName))
-    : bot.inventory.items().find((i) => foods[i.type])
+    : bot.inventory.items().find((i) => foods[i.name])
   if (!item) return foodName ? `No "${foodName}" in inventory.` : 'No food in inventory.'
   await bot.equip(item, 'hand')
   try {

@@ -355,6 +355,15 @@ bot.once('spawn', () => {
 
     const runOne = (part, username) => runAliasOrNull(part, username) || runTool(part)
 
+    // Read-only queries that just report state — answered without interrupting the
+    // current action (no preempt), so "inv" mid-task doesn't stop the bot.
+    const INFO_COMMANDS = new Set(['inventory', 'healthStatus', 'observe', 'listWaypoints'])
+    const isInfoCommand = (text) => {
+      if (text.includes(';')) return false // a batch — treat normally
+      const typed = text.trim().split(/\s+/)[0].toLowerCase()
+      return INFO_COMMANDS.has(TOOL_NAME_ALIASES[typed] || typed)
+    }
+
     // Withdraw an item from a chest. Returns whether we got any.
     const fetchMissing = async (name, count) => {
       const got = await dispatch(bot, 'withdrawFromChest', { itemName: name, count: count || 64 })
@@ -401,6 +410,19 @@ bot.once('spawn', () => {
       const cmd = commandFor(message, bot.username)
       if (!cmd) return // not addressed to this bot
       console.log(`<${username}> ${message}`)
+      // Read-only queries (inventory, health, etc.) answer without interrupting whatever the bot is doing.
+      if (isInfoCommand(cmd)) {
+        const result = await runOne(cmd, username)
+        if (result !== null) {
+          console.log(`  ${result}`)
+          const parts = splitForChat(result.replace(/\s+/g, ' '))
+          for (let i = 0; i < parts.length; i++) {
+            if (i) await new Promise((r) => setTimeout(r, 400))
+            bot.chat(`${ECHO} ${parts[i]}`)
+          }
+        }
+        return
+      }
       preempt() // interrupt any running action (so "stop" / new commands take effect now)
       // Run one or more ";"-separated commands in sequence; stop if a newer command preempts us.
       const mySeq = bot.cmdSeq
@@ -430,6 +452,13 @@ bot.once('spawn', () => {
       const text = line.trim()
       if (!text) { rl.prompt(); return }
       if (text === '??' || text === '?' || text === 'help') { printCommands(); rl.prompt(); return }
+      // Read-only queries answer without interrupting the current action.
+      if (isInfoCommand(text)) {
+        const result = await runOne(text)
+        if (result !== null) console.log(`  ${result}`)
+        rl.prompt()
+        return
+      }
       preempt() // interrupt any running action
       const mySeq = bot.cmdSeq
       const batch = text.split(';').map((s) => s.trim()).filter(Boolean)

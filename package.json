@@ -10,7 +10,8 @@
     "server": "node scripts/start-server.mjs",
     "test:commands": "node scripts/test-commands.js",
     "server:start": "bash scripts/start-server.sh",
-    "server:stop": "bash scripts/stop-server.sh"
+    "server:stop": "bash scripts/stop-server.sh",
+    "worlds": "node scripts/list-worlds.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

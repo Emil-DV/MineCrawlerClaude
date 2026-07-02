@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Start the Minecraft server in the background (detached), with a console FIFO so
 # stop-server.sh can shut it down gracefully (saving the world).
-# Usage: scripts/start-server.sh        (MC_MEMORY=4G to override the 2G default)
+# Usage: scripts/start-server.sh [world]   (MC_MEMORY=4G to override the 2G default)
+#   [world]  optional world name to load (from worlds.json / a server/<world> folder);
+#            a new name creates a fresh world. Omit to keep the current world.
+#   List worlds with:  npm run worlds
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,6 +14,7 @@ HOLDERFILE="$SERVER_DIR/.holder.pid"
 FIFO="$SERVER_DIR/.console.in"
 LOG="$SERVER_DIR/console.log"
 MEM="${MC_MEMORY:-2G}"
+WORLD="${1:-}"
 
 [ -f "$SERVER_DIR/server.jar" ] || { echo "server/server.jar not found. Run: npm run server:setup"; exit 1; }
 
@@ -20,6 +24,11 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
 fi
 if (exec 3<>/dev/tcp/127.0.0.1/25565) 2>/dev/null; then
   echo "Port 25565 is already in use — a server is already running."; exit 0
+fi
+
+# Select the world (sets level-name + its profile's difficulty/gamemode).
+if [ -n "$WORLD" ]; then
+  (cd "$ROOT" && node scripts/apply-world.mjs "$WORLD") || exit 1
 fi
 
 # (Re)create the console FIFO and hold its write end open so the server's stdin

@@ -185,6 +185,22 @@ const tools = [
     },
   },
   {
+    name: 'mineDownshaft',
+    description: 'Dig a spiral staircase going DOWN: each step is one block forward and one down, turning north→east→south→west every 4 blocks, for the given depth. Drops a torch every few steps (needs torches in inventory). A quick mine entrance.',
+    input_schema: {
+      type: 'object',
+      properties: { depth: { type: 'number', description: 'How many blocks deep. Default 16.' } },
+    },
+  },
+  {
+    name: 'mineStairwell',
+    description: 'Dig a straight staircase going UP in the direction the bot faces: each step is one block forward and one up, for the given height. Clears headroom, lays a tread where the ground is missing, and drops a torch every few steps (needs torches). A stairway back to the surface.',
+    input_schema: {
+      type: 'object',
+      properties: { height: { type: 'number', description: 'How many blocks up. Default 8.' } },
+    },
+  },
+  {
     name: 'digBlock',
     description: 'Mine the single block at exact coordinates. Pair with findBlocks: locate a block, then dig it. Equip the right tool first for ores/hard blocks.',
     input_schema: {
@@ -422,6 +438,25 @@ const tools = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'firework',
+    description: 'Launch firework rockets straight up (a fireworks show). Equips a firework_rocket (fetching from a nearby chest if the bot has none) and fires it `count` times. Note: a firework only launches when used against the ground — plain useItem in the air does nothing.',
+    input_schema: {
+      type: 'object',
+      properties: { count: { type: 'number', description: 'How many to launch. Default 1.' } },
+    },
+  },
+  {
+    name: 'tntCannon',
+    description: 'Build a blast-proof water-charge TNT cannon (obsidian trough + water) and fire it. Aims the way the bot faces and launches TNT dozens of blocks downrange, surviving repeat fire. Fires `count` times (the bot reloads between shots; "stop" halts it). `power` = charge TNT per shot (more = longer range). Requires the bot to be OPPED (uses /setblock and /summon). Stand behind the bot — never downrange.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        count: { type: 'number', description: 'How many shots. Default 3.' },
+        power: { type: 'number', description: 'Charge TNT per shot, 1-12 (more = farther). Default 8.' },
+      },
+    },
+  },
+  {
     name: 'collectItems',
     description: 'Walk to and pick up nearby dropped item stacks on the ground.',
     input_schema: {
@@ -484,6 +519,40 @@ const tools = [
     },
   },
   {
+    name: 'levelArea',
+    description: 'Level a flat rectangle to the height of the block under the bot: mow down anything above and fill holes with dirt/stone. The near corner is the cell to the bot\'s RIGHT; the rectangle runs `width` cells to the right and `length` cells forward (the way the bot faces). Optional fill block (defaults to any dirt/stone/cobblestone in inventory). Max 256 cells. Remembers the footprint so buildRectWall can enclose it.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        width: { type: 'number', description: 'Cells to the bot\'s right.' },
+        length: { type: 'number', description: 'Cells forward (the way the bot faces).' },
+        fillName: { type: 'string', description: 'Optional block to fill holes with, e.g. "dirt", "stone".' },
+      },
+      required: ['width', 'length'],
+    },
+  },
+  {
+    name: 'buildRectWall',
+    description: 'Build a wall around the rectangle most recently levelled by levelArea, `height` blocks tall (default 1), from stone/dirt. Run levelArea first. Optional block name (defaults to any dirt/stone in inventory).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        height: { type: 'number', description: 'Courses tall. Default 1.' },
+        blockName: { type: 'string', description: 'Optional wall block, e.g. "cobblestone".' },
+      },
+    },
+  },
+  {
+    name: 'ceiling',
+    description: 'Roof the walled rectangle: fill its footprint at the top of the wall with a block, making a ceiling over the enclosure. Run levelArea then buildRectWall first (the roof height comes from that wall). Optional block name (defaults to any dirt/stone in inventory).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        blockName: { type: 'string', description: 'Optional roof block, e.g. "stone". Defaults to any dirt/stone in inventory.' },
+      },
+    },
+  },
+  {
     name: 'activateBlock',
     description: 'Right-click / use a block at coordinates: open doors, press buttons, flip levers, open chests, etc.',
     input_schema: {
@@ -518,6 +587,11 @@ const tools = [
       },
       required: ['itemName'],
     },
+  },
+  {
+    name: 'unloadInventory',
+    description: 'Store everything into nearby chests/barrels EXCEPT one of each tool, weapon, and armor kind (the best-tier one) — duplicate and lesser copies get unloaded with the loot. Overflows to the next nearest chest as each fills. Good for "dump everything, keep one of my gear" after a trip.',
+    input_schema: { type: 'object', properties: {} },
   },
   {
     name: 'withdrawFromChest',

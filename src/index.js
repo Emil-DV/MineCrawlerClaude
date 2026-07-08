@@ -3,6 +3,7 @@ const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const readline = require('readline')
 const { tools, dispatch } = require('./tools')
+const { equipBetterArmor } = require('./minecraft-actions')
 
 // Print the avatar's available actions with their parameter order. "??", "?", "help".
 function printCommands() {
@@ -108,11 +109,14 @@ const ALIASES = {
 const TOOL_NAME_ALIASES = {
   mine: 'mineNearestBlock',
   plant: 'plantField',
+  level: 'levelArea',
+  wall: 'buildRectWall',
   harvest: 'harvestAndCollect',
   replace: 'replaceField',
   gtw: 'gotoWaypoint',
   grab: 'withdrawFromChest',
   store: 'depositToChest',
+  unload: 'unloadInventory',
   craft: 'craftItem',
   place: 'placeBlock',
   equip: 'equipItem',
@@ -122,6 +126,10 @@ const TOOL_NAME_ALIASES = {
   inv: 'inventory',
   attack: 'attackEntity',
   play: 'playDisc',
+  cannon: 'tntCannon',
+  roof: 'ceiling',
+  downshaft: 'mineDownshaft',
+  stairwell: 'mineStairwell',
 }
 function resolveAlias(text, sender) {
   const fn = ALIASES[text.trim().toLowerCase()]
@@ -186,36 +194,53 @@ bot.once('spawn', () => {
   bot.pathfinder.setMovements(bot.defaultMovements)
   console.log(`Bot spawned as "${bot.username}" (${STANDALONE ? 'standalone' : OLLAMA ? `ollama: ${process.env.OLLAMA_MODEL || 'qwen2.5-coder:7b'}` : 'anthropic'} mode).`)
 
-  // Personal space: keep ~1 block of clearance from any other player/bot. Only
-  // nudges when idle, so it never fights an active goToPlayer/followPlayer/agent goal.
-  const MIN_GAP = 1 // step away if another entity is closer than this (blocks)
+  // Personal space: keep clearance from other players/bots. Only nudges when idle
+  // (not mid-move), so it never fights an active goTo/follow while it's travelling.
+  // It DOES run while following once the bots have settled — otherwise several
+  // followers pile onto the same spot on top of you. When it steps a follower
+  // aside it remembers and re-applies the follow goal so following continues.
+  const MIN_GAP = 1.8 // start separating if a peer is closer than this (blocks)
+  const TARGET_GAP = 2.4 // step out to about this far from the clump
   let keepingDistance = false
   const personalSpace = setInterval(async () => {
     if (keepingDistance || !bot.entity || bot.pathfinder.isMoving()) return
     if (bot.gatherUntil && Date.now() < bot.gatherUntil) return // just summoned — let bots gather
-    // Never disturb an active follow — overriding the goal would stop the bot
-    // from following once it catches up.
-    const g = bot.pathfinder.goal
-    if (g && g.constructor && g.constructor.name === 'GoalFollow') return
-    let nearest = null
-    let best = Infinity
+
+    // Sum the push from EVERY crowding peer (closer ones push harder), so a bot in
+    // a clump of several moves away from the group's centre instead of ping-ponging
+    // between two neighbours.
+    const me = bot.entity.position
+    let px = 0, pz = 0, crowded = 0
     for (const p of Object.values(bot.players)) {
       if (!p.entity || p.username === bot.username) continue
-      const d = bot.entity.position.distanceTo(p.entity.position)
-      if (d < best) { best = d; nearest = p.entity }
+      const d = me.distanceTo(p.entity.position)
+      if (d >= MIN_GAP) continue
+      crowded++
+      let ax = me.x - p.entity.position.x, az = me.z - p.entity.position.z
+      let n = Math.hypot(ax, az)
+      if (n < 0.01) { const a = Math.random() * Math.PI * 2; ax = Math.cos(a); az = Math.sin(a); n = 1 } // exactly overlapping
+      const w = 1 / Math.max(d, 0.3) // closer neighbours weigh more
+      px += (ax / n) * w; pz += (az / n) * w
     }
-    if (!nearest || best >= MIN_GAP) return
+    if (!crowded) return
+
     keepingDistance = true
+    // If we're following, remember the goal so we can resume it after stepping aside.
+    const g = bot.pathfinder.goal
+    const follow = g && g.constructor && g.constructor.name === 'GoalFollow' ? g : null
     try {
-      const away = bot.entity.position.minus(nearest.position)
-      away.y = 0
-      if (away.norm() < 0.01) away.x = 1 // exactly overlapping → pick any direction
-      const dir = away.normalize()
-      const t = bot.entity.position.offset(dir.x * 1.5, 0, dir.z * 1.5)
-      await bot.pathfinder.goto(new goals.GoalNear(Math.floor(t.x), Math.floor(bot.entity.position.y), Math.floor(t.z), 1))
+      let pn = Math.hypot(px, pz)
+      if (pn < 0.01) { const a = Math.random() * Math.PI * 2; px = Math.cos(a); pz = Math.sin(a); pn = 1 }
+      const tx = me.x + (px / pn) * TARGET_GAP
+      const tz = me.z + (pz / pn) * TARGET_GAP
+      if (bot.followMovements) bot.pathfinder.setMovements(bot.followMovements) // non-destructive sidestep
+      await bot.pathfinder.goto(new goals.GoalNear(Math.floor(tx), Math.floor(me.y), Math.floor(tz), 0))
     } catch { /* blocked/cornered — try again next tick */ }
-    keepingDistance = false
-  }, 250)
+    finally {
+      if (follow && follow.entity) bot.pathfinder.setGoal(new goals.GoalFollow(follow.entity, Math.sqrt(follow.rangeSq)), true)
+      keepingDistance = false
+    }
+  }, 300)
   bot.once('end', () => clearInterval(personalSpace))
 
   // Don't drown: if the bot's head is underwater, hold the swim-up control until
@@ -282,6 +307,20 @@ bot.once('spawn', () => {
   }, 2000)
   bot.once('end', () => clearInterval(autoEat))
 
+  // Auto-armor: whenever the bot is carrying an armor piece that beats what it's
+  // wearing (by material), put it on. Runs passively so picked-up loot gets worn.
+  let armorBusy = false
+  const autoArmor = setInterval(async () => {
+    if (armorBusy || !bot.entity) return
+    armorBusy = true
+    try {
+      const up = await equipBetterArmor(bot)
+      if (up.length) console.log(`[auto-armor] equipped ${up.join(', ')}`)
+    } catch { /* ignore */ }
+    armorBusy = false
+  }, 3000)
+  bot.once('end', () => clearInterval(autoArmor))
+
   // If text is a phrase alias (e.g. "come to me"), run its tool and return the
   // result promise; otherwise return null so normal handling proceeds.
   const runAliasOrNull = (text, sender) => {
@@ -346,7 +385,11 @@ bot.once('spawn', () => {
         case 'placeBlock': return { name: v.blockName, count: 1 }
         case 'plantField': return { name: v.seedName, count: 1 }
         case 'replaceField': return { name: v.blockName, count: 1 }
+        case 'levelArea': return v.fillName ? { name: v.fillName, count: fin((v.width || 1) * (v.length || 1)) } : null
         case 'smeltItem': return { name: v.inputName, count: v.count || 1 }
+        case 'firework': return { name: 'firework_rocket', count: v.count || 1 }
+        case 'mineDownshaft': return { name: 'torch', count: Math.ceil((v.depth || 16) / 4) }
+        case 'mineStairwell': return { name: 'torch', count: Math.ceil((v.height || 8) / 4) }
         case 'fillArea': return { name: v.blockName, count: fin(box(v.x2, v.x1) * box(v.y2, v.y1) * box(v.z2, v.z1)) }
         case 'buildWall': return { name: v.blockName, count: fin((v.length || 1) * (v.height || 1)) }
         default: return null

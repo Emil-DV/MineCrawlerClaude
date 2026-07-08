@@ -11,6 +11,8 @@
     "test:commands": "node scripts/test-commands.js",
     "server:start": "bash scripts/start-server.sh",
     "server:stop": "bash scripts/stop-server.sh",
+    "ollama:start": "bash scripts/start-ollama.sh",
+    "ollama:stop": "bash scripts/stop-ollama.sh",
     "worlds": "node scripts/list-worlds.mjs"
   },
   "dependencies": {

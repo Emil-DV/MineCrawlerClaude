@@ -20,6 +20,9 @@ function mcData(bot) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+// Reject if a promise (a goto/place/look) hasn't settled in time, so one stuck
+// navigation can't hang a whole build.
+const withTimeout = (p, ms) => Promise.race([p, sleep(ms).then(() => { throw new Error('timeout') })])
 
 // Standalone/AI preemption: a long-running action records bot.cmdSeq at the start
 // and bails when it changes (a newer command or "stop" arrived). Outside the modes
@@ -303,6 +306,103 @@ async function digTestTunnel(bot, { depth = 5 }) {
   return `Tunnel dug ${mined ? Math.ceil(mined / 2) : 0} deep at y=${startY} (mined ${mined} blocks, placed ${torches} torch(es)).${note} Now at (${Math.round(p.x)}, ${Math.round(p.y)}, ${Math.round(p.z)}).`
 }
 
+const flooredPos = (bot) => new Vec3(Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y), Math.floor(bot.entity.position.z))
+
+// Mine the block at pos if it's solid and diggable (right tool auto-equipped).
+// Returns true if the cell ends up air. Leaves air/liquid/bedrock alone.
+async function mineAt(bot, pos) {
+  const b = bot.blockAt(pos)
+  if (!b) return false
+  if (b.name === 'air' || b.name === 'cave_air' || b.name === 'void_air') return true
+  if (b.name === 'water' || b.name === 'lava' || b.name === 'bedrock') return false
+  await equipBestToolForBlock(bot, b)
+  if (!bot.canDigBlock(b)) return false
+  try { await bot.dig(b) } catch { return false }
+  return true
+}
+
+// Place a WALL torch at head height beside `pos` (overhead of the step, not on the
+// tread you walk on), lighting the path. Best-effort; restores the held tool.
+async function dropTorch(bot, pos) {
+  const torch = bot.inventory.items().find((i) => i.name === 'torch')
+  if (!torch) return false
+  const cell = pos.offset(0, 1, 0) // head-level air cell above the step
+  const here = bot.blockAt(cell)
+  if (here && here.name !== 'air') return false
+  const held = bot.heldItem
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const wall = bot.blockAt(cell.offset(dx, 0, dz))
+    if (!wall || wall.boundingBox !== 'block') continue // need a solid side wall to hang on
+    try {
+      await bot.equip(torch, 'hand')
+      await bot.placeBlock(wall, new Vec3(-dx, 0, -dz)) // torch clings to the wall's inner face
+      if (held && (!bot.heldItem || bot.heldItem.type !== held.type)) { try { await bot.equip(held, 'hand') } catch { /* ignore */ } }
+      return true
+    } catch { /* try another wall */ }
+  }
+  return false
+}
+
+// Dig a descending spiral staircase: each step is one block forward and one down,
+// turning north→east→south→west every 4 blocks, for `depth` blocks. Places a torch
+// every few steps (needs torches). Lays a tread if it opens into a void.
+async function mineDownshaft(bot, { depth = 16 }) {
+  const n = Math.max(1, Math.min(Math.floor(Number(depth) || 0), 128))
+  const LEGS = ['north', 'east', 'south', 'west']
+  const seq = startSeq(bot)
+  if (bot.defaultMovements) bot.pathfinder.setMovements(bot.defaultMovements)
+  let feet = flooredPos(bot)
+  let mined = 0, torches = 0, stuck = 0
+  for (let step = 0; step < n; step++) {
+    if (preempted(bot, seq)) return `Dug ${step} step(s) down — stopped.`
+    const dir = FORWARD_BY_DIR[LEGS[Math.floor(step / 4) % 4]]
+    const front = feet.offset(dir.x, 0, dir.z)
+    const newFeet = front.offset(0, -1, 0)
+    // Clear a 2-high descending passage: front head, front, and the step down.
+    for (const p of [front.offset(0, 1, 0), front, newFeet]) if (await mineAt(bot, p)) mined++
+    // Something to stand on at the new step; lay a block if it's a void.
+    const tread = newFeet.offset(0, -1, 0), tb = bot.blockAt(tread)
+    if (!tb || tb.boundingBox !== 'block') await placeOne(bot, pickFillBlock(bot) || 'cobblestone', tread)
+    try { await bot.pathfinder.goto(new goals.GoalBlock(newFeet.x, newFeet.y, newFeet.z)) } catch { /* keep going */ }
+    if (step % 4 === 0 && await dropTorch(bot, feet)) torches++
+    const now = flooredPos(bot)
+    if (now.y >= feet.y) { if (++stuck >= 3) return `Dug ${step} step(s) down, then got stuck (mined ${mined}, ${torches} torch(es)).` } else stuck = 0
+    feet = now
+  }
+  await faceCommander(bot)
+  return `Dug a spiral staircase down ${n} block(s) (mined ${mined}, placed ${torches} torch(es)).`
+}
+
+// Dig a straight ascending staircase in the direction the bot faces: each step is
+// one block forward and one up, for `height` blocks. Clears headroom, lays a tread
+// where the ground is missing, and drops a torch every few steps (needs torches).
+async function mineStairwell(bot, { height = 8 }) {
+  const n = Math.max(1, Math.min(Math.floor(Number(height) || 0), 128))
+  const dir = FORWARD_BY_DIR[cardinalFromYaw(bot.entity.yaw)]
+  const seq = startSeq(bot)
+  if (bot.defaultMovements) bot.pathfinder.setMovements(bot.defaultMovements)
+  let feet = flooredPos(bot)
+  let mined = 0, torches = 0, stuck = 0
+  for (let step = 0; step < n; step++) {
+    if (preempted(bot, seq)) return `Dug ${step} step(s) up — stopped.`
+    const front = feet.offset(dir.x, 0, dir.z)
+    const newFeet = front.offset(0, 1, 0)
+    // Clear headroom: the block ABOVE the bot's head (so it can rise), the new step,
+    // and above the new step. (feet+1 is the bot's own head space — already air.)
+    for (const p of [feet.offset(0, 2, 0), newFeet, newFeet.offset(0, 1, 0)]) if (await mineAt(bot, p)) mined++
+    // A tread to step onto (front, same level); lay a block if it's not solid.
+    const tb = bot.blockAt(front)
+    if (!tb || tb.boundingBox !== 'block') await placeOne(bot, pickFillBlock(bot) || 'cobblestone', front)
+    try { await bot.pathfinder.goto(new goals.GoalBlock(newFeet.x, newFeet.y, newFeet.z)) } catch { /* keep going */ }
+    if (step % 4 === 0 && await dropTorch(bot, feet)) torches++
+    const now = flooredPos(bot)
+    if (now.y <= feet.y) { if (++stuck >= 3) return `Dug ${step} step(s) up, then got stuck (mined ${mined}, ${torches} torch(es)).` } else stuck = 0
+    feet = now
+  }
+  await faceCommander(bot)
+  return `Dug a staircase up ${n} block(s) (mined ${mined}, placed ${torches} torch(es)).`
+}
+
 // Nearest other player's entity (or null).
 function nearestPlayer(bot) {
   const ps = Object.values(bot.players).filter((p) => p.username !== bot.username && p.entity)
@@ -349,6 +449,36 @@ async function equipBestToolForBlock(bot, block) {
   if (!block) return
   const cat = toolCategoryForBlock(block.name)
   if (cat) await equipBestOfCategory(bot, cat)
+}
+
+// Armor material ranking (defence / upgrade order) and the four armor slots
+// (5=head, 6=torso, 7=legs, 8=feet in the player inventory window).
+const ARMOR_RANK = { leather: 0, golden: 1, chainmail: 2, turtle: 2, iron: 3, diamond: 4, netherite: 5 }
+const ARMOR_SLOTS = [
+  { dest: 'head', suffix: '_helmet', idx: 5 },
+  { dest: 'torso', suffix: '_chestplate', idx: 6 },
+  { dest: 'legs', suffix: '_leggings', idx: 7 },
+  { dest: 'feet', suffix: '_boots', idx: 8 },
+]
+const armorRank = (name) => (name ? (ARMOR_RANK[name.split('_')[0]] ?? -1) : -1)
+
+// Put on any armor piece the bot is carrying that beats what it's wearing (by
+// material). Returns the names of pieces it upgraded to (possibly empty). Safe to
+// call repeatedly; skips while a container window is open so it won't fight a chest.
+async function equipBetterArmor(bot) {
+  if (!bot.entity || !bot.inventory || bot.currentWindow) return []
+  const upgraded = []
+  for (const slot of ARMOR_SLOTS) {
+    const worn = bot.inventory.slots[slot.idx]
+    const wornRank = worn ? armorRank(worn.name) : -1
+    const cands = bot.inventory.items().filter((i) => i.name.endsWith(slot.suffix))
+    if (!cands.length) continue
+    cands.sort((a, b) => armorRank(b.name) - armorRank(a.name))
+    if (armorRank(cands[0].name) > wornRank) {
+      try { await bot.equip(cands[0], slot.dest); upgraded.push(cands[0].name) } catch { /* couldn't equip */ }
+    }
+  }
+  return upgraded
 }
 
 async function mineNearestBlock(bot, { blockName, count = 4096 }) {
@@ -691,6 +821,11 @@ async function plantField(bot, { seedName }) {
     return `No "${seedName}" in inventory.`
   }
 
+  // Walk the field non-destructively — never let pathfinding dig through stones or
+  // flowers to reach a cell (that drops cobblestone/peonies). Don't inherit a
+  // build-movement a previous command may have left active.
+  if (bot.followMovements) bot.pathfinder.setMovements(bot.followMovements)
+
   const fy = Math.floor(bot.entity.position.y) // feet level
   const floorY = fy - 1 // the ground the bot stands on
   const floorName = (x, z) => bot.blockAt(new Vec3(x, floorY, z))?.name
@@ -736,26 +871,50 @@ async function plantField(bot, { seedName }) {
       const z = forward ? minz + i : maxz - i
       if (!field.has(key(x, z))) continue
       const pos = new Vec3(x, floorY, z)
-      const above = bot.blockAt(new Vec3(x, floorY + 1, z))
+      let above = bot.blockAt(new Vec3(x, floorY + 1, z))
       if (above && !REPLACEABLE.has(above.name)) { skipped++; continue } // no room to plant
-      await bot.pathfinder.goto(new goals.GoalNear(x, floorY, z, 2)).catch(() => {})
-      if (above && above.name !== 'air') { try { await bot.dig(above) } catch {} } // clear tall grass
 
+      // Stand on a NEIGHBOURING field cell, never the target square itself — standing
+      // on the square we're planting makes the seed placement fail (our feet occupy it).
+      const nb = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => [x + dx, z + dz]).find(([nx, nz]) => field.has(key(nx, nz)))
+      if (nb) await bot.pathfinder.goto(new goals.GoalNear(nb[0], fy, nb[1], 0)).catch(() => {})
+      else await bot.pathfinder.goto(new goals.GoalNear(x, floorY, z, 1)).catch(() => {})
+
+      // Clear the block above (tall grass/flowers we may replace); retry — the block
+      // update can lag a tick behind the dig.
+      above = bot.blockAt(new Vec3(x, floorY + 1, z))
+      for (let t = 0; t < 3 && above && above.name !== 'air' && REPLACEABLE.has(above.name); t++) {
+        try { await bot.dig(above) } catch { /* ignore */ }
+        await sleep(120)
+        above = bot.blockAt(new Vec3(x, floorY + 1, z))
+      }
+      if (above && above.name !== 'air') { skipped++; continue } // still blocked
+
+      // Till to farmland; retry — a single hoe-use or the block update can miss.
+      await bot.equip(hoe, 'hand')
       let ground = bot.blockAt(pos)
-      if (ground && ground.name !== 'farmland') {
-        await bot.equip(hoe, 'hand')
+      for (let t = 0; t < 3 && (!ground || ground.name !== 'farmland'); t++) {
         await bot.lookAt(pos.offset(0.5, 1, 0.5), true)
-        try { await bot.activateBlock(bot.blockAt(pos)) } catch {}
-        await sleep(150)
+        try { await bot.activateBlock(bot.blockAt(pos)) } catch { /* ignore */ }
+        await sleep(250)
         ground = bot.blockAt(pos)
       }
       if (!ground || ground.name !== 'farmland') { skipped++; continue }
       tilled++
 
+      // Plant the seed; retry and verify a crop actually appeared on the farmland.
       const seed = bot.inventory.items().find((i) => i.name === seedName || i.name.includes(seedName))
       if (!seed) { bot.missingItem = seedName; return `Hoed ${tilled}, planted ${planted}, then ran out of ${seedName}.` }
       await bot.equip(seed, 'hand')
-      try { await bot.placeBlock(ground, new Vec3(0, 1, 0)); planted++ } catch {}
+      let ok = false
+      for (let t = 0; t < 3 && !ok; t++) {
+        await bot.lookAt(pos.offset(0.5, 1, 0.5), true)
+        try { await bot.placeBlock(ground, new Vec3(0, 1, 0)) } catch { /* ignore */ }
+        await sleep(160)
+        const crop = bot.blockAt(new Vec3(x, floorY + 1, z))
+        ok = !!crop && crop.name !== 'air'
+      }
+      if (ok) planted++; else skipped++
     }
   }
   const w = maxx - minx + 1, h = maxz - minz + 1
@@ -828,6 +987,9 @@ async function replaceField(bot, { blockName }) {
       if (Math.floor(bot.entity.position.x) === x && Math.floor(bot.entity.position.z) === z) { skipped++; continue }
 
       if (cur && cur.name !== 'air') {
+        // Equip the right tool for THIS block every time — the previous placeOne
+        // left the replacement block in hand, which would dig the next cell slowly.
+        await equipBestToolForBlock(bot, cur)
         try { await bot.lookAt(pos.offset(0.5, 0.5, 0.5), true); await bot.dig(cur) } catch { /* ignore */ }
       }
       const r = await placeOne(bot, blockName, pos)
@@ -837,6 +999,328 @@ async function replaceField(bot, { blockName }) {
   }
   const w = maxx - minx + 1, h = maxz - minz + 1
   return `Replaced ${replaced} floor block(s) in the ${w}x${h} area with ${blockName} (${skipped} skipped).`
+}
+
+// Blocks preferred for filling holes / building a simple wall, best-liked first.
+const FILL_PREFERENCE = ['dirt', 'cobblestone', 'stone', 'deepslate', 'netherrack', 'sandstone', 'sand', 'gravel']
+
+// Pick a fill/build block: an explicit name if the bot has it (exact then partial),
+// else the first preferred earthy block in inventory. Returns a block name or null.
+function pickFillBlock(bot, name) {
+  const items = bot.inventory.items()
+  if (name) {
+    const it = items.find((i) => i.name === name) || items.find((i) => i.name.includes(name))
+    return it ? it.name : name // fall back to the requested name so fetch-missing can grab it
+  }
+  for (const n of FILL_PREFERENCE) if (items.some((i) => i.name === n)) return n
+  const any = items.find((i) => /dirt|stone|cobble|gravel|_sand$|^sand$|netherrack/.test(i.name))
+  return any ? any.name : null
+}
+
+// How high above the target level to mow away blocks in each column.
+const MOW_UP = 8
+
+// Level a width x length rectangle to the height of the block the bot stands on.
+// The near corner is the cell to the bot's right; the rectangle runs `width` cells
+// to the right and `length` cells forward (the way the bot faces). Mounds are mown
+// down and holes filled with dirt/stone so the whole footprint is flat at one level.
+// Remembers the footprint on bot.lastRect so a follow-up "wall" can enclose it.
+async function levelArea(bot, { width, length, fillName }) {
+  const w = Math.max(1, Math.floor(Number(width) || 0))
+  const l = Math.max(1, Math.floor(Number(length) || 0))
+  if (w * l > 256) return `That area is ${w}x${l} (${w * l} cells); max 256 per call. Use a smaller size.`
+
+  const F = FORWARD_BY_DIR[cardinalFromYaw(bot.entity.yaw)]
+  const R = { x: -F.z, z: F.x } // unit step to the bot's right
+  const bx = Math.floor(bot.entity.position.x), bz = Math.floor(bot.entity.position.z)
+  const floorY = Math.floor(bot.entity.position.y) - 1 // the surface the bot stands on
+  const sx = bx + R.x, sz = bz + R.z // near corner: the cell to the bot's right
+
+  // Every cell of the footprint (world-axis-aligned, since R and F are cardinal).
+  const cells = []
+  let minx = Infinity, maxx = -Infinity, minz = Infinity, maxz = -Infinity
+  for (let a = 0; a < w; a++) {
+    for (let b = 0; b < l; b++) {
+      const x = sx + R.x * a + F.x * b
+      const z = sz + R.z * a + F.z * b
+      cells.push([x, z])
+      minx = Math.min(minx, x); maxx = Math.max(maxx, x)
+      minz = Math.min(minz, z); maxz = Math.max(maxz, z)
+    }
+  }
+
+  const fill = pickFillBlock(bot, fillName)
+
+  const seq = startSeq(bot)
+  let mown = 0, filled = 0, leftover = 0, ranOut = false
+  for (const [x, z] of cells) {
+    if (preempted(bot, seq)) { if (bot.defaultMovements) bot.pathfinder.setMovements(bot.defaultMovements); return `Levelling stopped (mown ${mown}, filled ${filled}).` }
+    // Positioning over uneven ground needs build movements; stand beside the column
+    // at the target level so we can reach it.
+    if (bot.buildMovements) bot.pathfinder.setMovements(bot.buildMovements)
+    await bot.pathfinder.goto(new goals.GoalNear(x, floorY + 1, z, 3)).catch(() => {})
+
+    // Mow: remove solid blocks above the target level, top-down.
+    for (let y = floorY + MOW_UP; y >= floorY + 1; y--) {
+      const b = bot.blockAt(new Vec3(x, y, z))
+      if (!b || b.boundingBox !== 'block') continue
+      const p = bot.entity.position // never dig the block holding the bot up
+      if (Math.floor(p.x) === x && Math.floor(p.z) === z && Math.floor(p.y) - 1 === y) continue
+      await equipBestToolForBlock(bot, b)
+      if (!bot.canDigBlock(b)) { leftover++; continue }
+      try { await bot.dig(b); mown++ } catch { leftover++ }
+    }
+
+    // Fill: if the target-level block is a hole (air/liquid/plant), lay fill.
+    const floor = bot.blockAt(new Vec3(x, floorY, z))
+    if (!floor || floor.boundingBox !== 'block') {
+      if (!fill) { ranOut = true; bot.missingItem = 'dirt'; continue }
+      const r = await placeOne(bot, fill, new Vec3(x, floorY, z))
+      if (r === 'placed') filled++
+      else if (r === 'no-item') { ranOut = true; continue }
+    }
+  }
+  if (bot.defaultMovements) bot.pathfinder.setMovements(bot.defaultMovements)
+
+  bot.lastRect = { minx, maxx, minz, maxz, floorY }
+  await faceCommander(bot)
+  const note = ranOut ? ` Ran short on fill (${fill || 'dirt'}).` : ''
+  return `Levelled a ${w}x${l} area at y=${floorY}: mown ${mown} block(s), filled ${filled} hole(s)${leftover ? `, ${leftover} left (unreachable/wrong tool)` : ''}.${note}`
+}
+
+// The perimeter cells of a rectangle in a continuous loop order (no repeats), so
+// the bot walks a tidy lap instead of hopping between scattered cells.
+function perimeterRing(minx, maxx, minz, maxz) {
+  const ring = [], seen = new Set()
+  const push = (x, z) => { const k = x + ',' + z; if (!seen.has(k)) { seen.add(k); ring.push([x, z]) } }
+  for (let x = minx; x <= maxx; x++) push(x, minz)
+  for (let z = minz; z <= maxz; z++) push(maxx, z)
+  for (let x = maxx; x >= minx; x--) push(x, maxz)
+  for (let z = maxz; z >= minz; z--) push(minx, z)
+  return ring
+}
+
+// Place one wall block while standing on the ground beside its column — no digging,
+// no scaffolding, no climbing onto the wall. standCells are preferred (interior)
+// spots to stand on. Returns a status like placeOne. Timeouts guard stuck pathing.
+async function placeWallFromGround(bot, blockName, target, standCells, feetY) {
+  const existing = bot.blockAt(target)
+  if (existing && !REPLACEABLE.has(existing.name)) return 'occupied'
+  const item = bot.inventory.items().find((i) => i.name === blockName || i.name.includes(blockName))
+  if (!item) { bot.missingItem = blockName; return 'no-item' }
+  if (bot.followMovements) bot.pathfinder.setMovements(bot.followMovements) // non-destructive
+  let stood = false
+  for (const [sx, sz] of standCells) {
+    try { await withTimeout(bot.pathfinder.goto(new goals.GoalNear(sx, feetY, sz, 0)), 8000); stood = true; break } catch { /* try next */ }
+  }
+  if (!stood) { try { await withTimeout(bot.pathfinder.goto(new goals.GoalNear(target.x, feetY, target.z, 2)), 8000) } catch { /* place from here */ } }
+  // Reference the block directly below (bottom-up guarantees it), else a solid neighbour.
+  let reference = bot.blockAt(target.offset(0, -1, 0)), faceVector = new Vec3(0, 1, 0)
+  if (!reference || reference.boundingBox !== 'block') {
+    reference = null
+    for (const dir of FACES) { const ref = bot.blockAt(target.minus(dir)); if (ref && ref.boundingBox === 'block') { reference = ref; faceVector = dir; break } }
+  }
+  if (!reference) return 'no-support'
+  await bot.equip(item, 'hand')
+  try {
+    await withTimeout(bot.lookAt(target.offset(0.5, 0.5, 0.5), true), 2500)
+    await withTimeout(bot.placeBlock(reference, faceVector), 4000)
+  } catch {
+    const now = bot.blockAt(target)
+    if (now && (now.name === item.name || now.name.includes(blockName))) return 'placed'
+    return 'failed'
+  }
+  return 'placed'
+}
+
+// Courses the bot can reliably place from the ground (survival reach). Taller walls
+// need elevation for the courses above this.
+const WALL_GROUND_COURSES = 5
+
+// Build a wall around the rectangle most recently levelled (levelArea's footprint),
+// `height` blocks tall, from stone/dirt. The bot walks the perimeter course by
+// course on the ground, placing without digging or scaffolding (no chaotic
+// climbing). For walls taller than it can reach from the ground, the upper courses
+// are placed with the scaffolding placer.
+async function buildRectWall(bot, { height = 1, blockName }) {
+  const rect = bot.lastRect
+  if (!rect) return `No levelled area to wall yet — run "level <width> <length>" first.`
+  const h = Math.max(1, Math.min(Math.floor(Number(height) || 1), 24))
+  const { minx, maxx, minz, maxz, floorY } = rect
+  rect.wallTop = floorY + h // remember the top course so "ceiling" can roof at this level
+  const block = pickFillBlock(bot, blockName)
+  if (!block) { bot.missingItem = 'stone'; return `No stone/dirt in inventory to build the wall with.` }
+
+  const ring = perimeterRing(minx, maxx, minz, maxz)
+  const inRect = (x, z) => x >= minx && x <= maxx && z >= minz && z <= maxz
+  const isPerim = (x, z) => inRect(x, z) && (x === minx || x === maxx || z === minz || z === maxz)
+  if (ring.length * h > MAX_BLOCKS) return `That wall is ${ring.length * h} blocks; max ${MAX_BLOCKS} per call. Use fewer courses or a smaller area.`
+  const restore = () => { if (bot.defaultMovements) bot.pathfinder.setMovements(bot.defaultMovements) }
+
+  const feetY = floorY + 1 // the bot stands here, on top of the levelled floor
+  const seq = startSeq(bot)
+  let placed = 0, skipped = 0, ranOut = false
+
+  // Ground build: walk the perimeter course by course, placing non-destructively.
+  const groundCourses = Math.min(h, WALL_GROUND_COURSES)
+  for (let dy = 0; dy < groundCourses && !ranOut; dy++) {
+    const y = floorY + 1 + dy
+    for (const [x, z] of ring) {
+      if (preempted(bot, seq)) { restore(); return `Built ${placed} block(s) — stopped.` }
+      const stand = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+        .map(([dx, dz]) => [x + dx, z + dz])
+        .filter(([nx, nz]) => !isPerim(nx, nz))
+        .sort((a, b) => (inRect(a[0], a[1]) ? 0 : 1) - (inRect(b[0], b[1]) ? 0 : 1)) // interior first
+      const r = await placeWallFromGround(bot, block, new Vec3(x, y, z), stand, feetY)
+      if (r === 'placed') placed++
+      else if (r === 'no-item') { ranOut = true; break }
+      else skipped++
+    }
+  }
+
+  // Tall walls: courses above ground reach need elevation — place them with the
+  // scaffolding placer (bottom-up, retried).
+  let tallNote = ''
+  if (h > WALL_GROUND_COURSES && !ranOut) {
+    const upper = []
+    for (let dy = WALL_GROUND_COURSES; dy < h; dy++) for (const [x, z] of ring) upper.push(new Vec3(x, floorY + 1 + dy, z))
+    const res = await placeCells(bot, block, upper)
+    placed += res.placed; skipped += res.skipped
+    if (res.ranOut) ranOut = true
+    tallNote = ` Top ${h - WALL_GROUND_COURSES} course(s) needed scaffolding to reach.`
+  }
+
+  restore()
+  await faceCommander(bot)
+  const dims = `${maxx - minx + 1}x${maxz - minz + 1}`
+  if (ranOut) return `Built ${placed} ${block} of the ${dims} wall, then ran out.${tallNote}`
+  return `Built a ${h}-high ${block} wall around the ${dims} area — walked the perimeter course by course (${placed} placed${skipped ? `, ${skipped} skipped` : ''}).${tallNote}`
+}
+
+// Cells of a rectangle in inward-spiral order (outer ring first, each ring a
+// continuous loop), so a bot filling them walks a smooth path — consecutive cells
+// are always adjacent — instead of hopping between opposite edges.
+function spiralCells(x0, x1, z0, z1) {
+  const out = []
+  while (x0 <= x1 && z0 <= z1) {
+    for (let x = x0; x <= x1; x++) out.push([x, z0])                  // top edge →
+    for (let z = z0 + 1; z <= z1; z++) out.push([x1, z])              // right edge ↓
+    if (z1 > z0) for (let x = x1 - 1; x >= x0; x--) out.push([x, z1]) // bottom edge ←
+    if (x1 > x0) for (let z = z1 - 1; z > z0; z--) out.push([x0, z])  // left edge ↑
+    x0++; x1--; z0++; z1--
+  }
+  return out
+}
+
+// Flood-fill the open floor area the bot is standing in, bounded by path-blocking
+// walls (the same enclosure logic as plantField). Returns the interior cells, their
+// bounding box, the floor level, and the surrounding wall's top height — or { error }.
+function enclosureAtFeet(bot) {
+  const fy = Math.floor(bot.entity.position.y) // feet level
+  const floorY = fy - 1
+  const blocksPath = (x, z) => { const b = bot.blockAt(new Vec3(x, fy, z)); return !!b && b.boundingBox === 'block' }
+  const hasFloor = (x, z) => { const b = bot.blockAt(new Vec3(x, floorY, z)); return !!b && b.boundingBox === 'block' }
+  const isOpen = (x, z) => hasFloor(x, z) && !blocksPath(x, z)
+
+  const bx = Math.floor(bot.entity.position.x), bz = Math.floor(bot.entity.position.z)
+  if (!isOpen(bx, bz)) return { error: `Stand inside the walled area (on its floor) and run ceiling — or run "level" first.` }
+  const MAX = 256, key = (x, z) => `${x},${z}`
+  const interior = new Map([[key(bx, bz), [bx, bz]]])
+  const queue = [[bx, bz]]
+  while (queue.length && interior.size <= MAX) {
+    const [x, z] = queue.shift()
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, nz = z + dz
+      if (interior.has(key(nx, nz))) continue
+      if (isOpen(nx, nz)) { interior.set(key(nx, nz), [nx, nz]); queue.push([nx, nz]) }
+    }
+  }
+  if (interior.size > MAX) return { error: `The area isn't enclosed (or is too big) — I couldn't find surrounding walls. Wall it in, or run "level" first.` }
+
+  // Bounding box + wall-top height (scan up the wall columns that border the interior).
+  let minx = Infinity, maxx = -Infinity, minz = Infinity, maxz = -Infinity
+  const tops = {}
+  for (const [x, z] of interior.values()) {
+    minx = Math.min(minx, x); maxx = Math.max(maxx, x); minz = Math.min(minz, z); maxz = Math.max(maxz, z)
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, nz = z + dz
+      if (interior.has(key(nx, nz)) || !blocksPath(nx, nz)) continue // only wall neighbours
+      let top = null
+      for (let y = fy; y < fy + 40; y++) { const b = bot.blockAt(new Vec3(nx, y, nz)); if (b && b.boundingBox === 'block') top = y; else if (top != null) break }
+      if (top != null) tops[top] = (tops[top] || 0) + 1
+    }
+  }
+  const entries = Object.entries(tops)
+  if (!entries.length) return { error: `I couldn't find walls around you — wall the area in, or run "level" first.` }
+  const topY = Number(entries.sort((a, b) => b[1] - a[1])[0][0]) // most common wall-top height
+  return { cells: [...interior.values()], minx, maxx, minz, maxz, floorY, topY }
+}
+
+// Roof the walled area: fill it at the top of the wall with a block, capping the
+// enclosure. Uses the last levelled/walled footprint if there is one; otherwise it
+// finds the walls the bot is standing inside (like plantField) and roofs that. The
+// bot places from the floor, outer cells first, so each new ceiling block has a
+// solid neighbour (the wall, then placed ceiling) to rest against.
+async function ceiling(bot, { blockName }) {
+  const rect = bot.lastRect
+  let minx, maxx, minz, maxz, floorY, topY, cells
+
+  if (rect) {
+    ;({ minx, maxx, minz, maxz, floorY } = rect)
+    topY = rect.wallTop
+    if (!topY) { // no wall built this session — detect the top of a corner column
+      for (let y = floorY + 1; y < floorY + 40; y++) {
+        const b = bot.blockAt(new Vec3(minx, y, minz))
+        if (b && b.boundingBox === 'block') topY = y; else if (topY) break
+      }
+      if (!topY) return `I don't know the roof height — build a wall first ("wall <height>"), then run ceiling.`
+    }
+    // Whole footprint in spiral order; the wall ring is already solid (skipped fast).
+    cells = spiralCells(minx, maxx, minz, maxz)
+  } else {
+    // No level/wall memory — roof the enclosure the bot is standing inside.
+    const found = enclosureAtFeet(bot)
+    if (found.error) return found.error
+    ;({ minx, maxx, minz, maxz, floorY, topY } = found)
+    // Spiral the interior as a continuous path (skip bbox cells that aren't interior).
+    const inside = new Set(found.cells.map(([x, z]) => `${x},${z}`))
+    cells = spiralCells(minx, maxx, minz, maxz).filter(([x, z]) => inside.has(`${x},${z}`))
+  }
+
+  const block = pickFillBlock(bot, blockName)
+  if (!block) { bot.missingItem = 'stone'; return `No stone/dirt in inventory to build the ceiling with.` }
+  if (cells.length > MAX_BLOCKS) return `That ceiling is ${cells.length} blocks; max ${MAX_BLOCKS} per call. Use a smaller area.`
+
+  // Cells are already in inward-spiral order (outer ring first), so each rests on
+  // the wall or an already-placed neighbour, and the bot walks a smooth spiral.
+
+  const feetY = floorY + 1
+  const seq = startSeq(bot)
+  let placed = 0, skipped = 0, ranOut = false
+  const retry = []
+  for (const [x, z] of cells) {
+    if (preempted(bot, seq)) { if (bot.defaultMovements) bot.pathfinder.setMovements(bot.defaultMovements); return `Placed ${placed} ceiling block(s) — stopped.` }
+    const stand = [[x, z], [x + 1, z], [x - 1, z], [x, z + 1], [x, z - 1]]
+    const r = await placeWallFromGround(bot, block, new Vec3(x, topY, z), stand, feetY)
+    if (r === 'placed') placed++
+    else if (r === 'occupied') skipped++
+    else if (r === 'no-item') { ranOut = true; break }
+    else retry.push(new Vec3(x, topY, z))
+  }
+  // Cells too high to reach from the floor — scaffold them in.
+  let tallNote = ''
+  if (!ranOut && retry.length) {
+    const res = await placeCells(bot, block, retry)
+    placed += res.placed; skipped += res.skipped
+    if (res.ranOut) ranOut = true
+    if (res.placed) tallNote = ` (${res.placed} placed with scaffolding to reach the height)`
+  }
+
+  if (bot.defaultMovements) bot.pathfinder.setMovements(bot.defaultMovements)
+  await faceCommander(bot)
+  const dims = `${maxx - minx + 1}x${maxz - minz + 1}`
+  if (ranOut) return `Roofed part of the ${dims} area (${placed} placed), then ran out of ${block}.`
+  return `Roofed the ${dims} area at y=${topY} with ${block}: ${placed} placed${skipped ? `, ${skipped} already solid` : ''}${tallNote}.`
 }
 
 async function mineArea(bot, { x1, y1, z1, x2, y2, z2, blockName }) {
@@ -1068,13 +1552,127 @@ async function eat(bot, { foodName }) {
   return `Ate ${item.name}. Food level now ${bot.food}.`
 }
 
+// Launch the held firework rocket. Unlike food/potions/bows, a rocket does nothing
+// on a bare air right-click (that path is only the elytra boost) — from the ground
+// it must be "used" against a block. Fire it against the ground under the bot, or
+// an adjacent block if there's no floor. Returns whether it launched.
+async function launchFirework(bot) {
+  const p = bot.entity.position
+  const bx = Math.floor(p.x), by = Math.floor(p.y), bz = Math.floor(p.z)
+  // (reference block, face vector) candidates: ground first, then the four sides.
+  const cands = [[new Vec3(bx, by - 1, bz), new Vec3(0, 1, 0)]]
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    cands.push([new Vec3(bx + dx, by, bz + dz), new Vec3(-dx, 0, -dz)]) // beside, inner face
+  }
+  for (const [pos, face] of cands) {
+    const ref = bot.blockAt(pos)
+    if (!ref || ref.boundingBox !== 'block') continue
+    try { await bot._genericPlace(ref, face, { swingArm: 'right' }); return true } catch { /* try next */ }
+  }
+  return false
+}
+
 async function useItem(bot) {
   const held = bot.heldItem?.name ?? 'nothing'
   if (held === 'nothing') return 'Nothing held to use. Equip an item first.'
+  // A firework rocket won't fire from an air right-click — launch it off a block.
+  if (held === 'firework_rocket') {
+    return (await launchFirework(bot))
+      ? 'Launched a firework rocket.'
+      : `Couldn't launch the firework — no solid block nearby to fire it from.`
+  }
   bot.activateItem()
   await sleep(300)
   bot.deactivateItem()
   return `Used ${held}.`
+}
+
+// Launch firework rockets straight up, count times. Equips a rocket (fetching from
+// a nearby chest if the bot has none), then fires with a short gap between each.
+async function firework(bot, { count = 1 }) {
+  const n = Math.max(1, Math.min(Math.floor(Number(count) || 1), 64))
+  let have = bot.inventory.items().find((i) => i.name === 'firework_rocket')
+  if (!have) {
+    const got = await withdrawFromChest(bot, { itemName: 'firework_rocket', count: n })
+    have = bot.inventory.items().find((i) => i.name === 'firework_rocket')
+    if (!have) { bot.missingItem = 'firework_rocket'; return `No firework_rocket in inventory or nearby chests. ${got}` }
+  }
+  await bot.equip(have, 'hand')
+
+  const seq = startSeq(bot)
+  let fired = 0
+  for (let i = 0; i < n; i++) {
+    if (preempted(bot, seq)) return `Launched ${fired} firework(s) — stopped.`
+    const cur = bot.inventory.items().find((it) => it.name === 'firework_rocket')
+    if (!cur) { bot.missingItem = 'firework_rocket'; break } // ran out mid-show
+    if (bot.heldItem?.name !== 'firework_rocket') await bot.equip(cur, 'hand')
+    if (await launchFirework(bot)) fired++
+    await sleep(700)
+  }
+  await faceCommander(bot)
+  if (fired === 0) return `Couldn't launch a firework — no solid block underfoot to fire from.`
+  return `Launched ${fired} firework${fired === 1 ? '' : 's'}.`
+}
+
+// A blast-proof "water-charge" TNT cannon, built with /setblock and fired with
+// /summon (both need op). An obsidian trough with water shrugs off the charge blast;
+// a cluster of short-fuse charge TNT launches a full-fuse projectile TNT dozens of
+// blocks downrange (the way the bot faces). Fires `count` times with the bot acting
+// as the auto-loader/clock; "stop" halts it. `power` = charge TNT per shot (range).
+async function tntCannon(bot, { count = 3, power = 8 }) {
+  const shots = Math.max(1, Math.min(Math.floor(Number(count) || 1), 20))
+  const nCharge = Math.max(1, Math.min(Math.floor(Number(power) || 8), 12))
+  const F = FORWARD_BY_DIR[cardinalFromYaw(bot.entity.yaw)]
+  const S = { x: -F.z, z: F.x } // bot's right; the 1-wide trough runs along forward
+  const fx = Math.floor(bot.entity.position.x)
+  const fy = Math.floor(bot.entity.position.y) // channel (feet) level; floor is fy-1
+  const fz = Math.floor(bot.entity.position.z)
+  // Block coords for a trough-relative offset (f forward, s side, dy up from feet).
+  const W = (f, s, dy) => ({ x: fx + F.x * f + S.x * s, y: fy + dy, z: fz + F.z * f + S.z * s })
+  const cc = (v) => `${v.x} ${v.y} ${v.z}`
+  const fill = (f0, f1, s0, s1, y0, y1, block) => bot.chat(`/fill ${cc(W(f0, s0, y0))} ${cc(W(f1, s1, y1))} minecraft:${block}`)
+
+  // Op probe: set one emplacement block and verify it applied.
+  const probe = W(2, 0, 0)
+  bot.chat(`/setblock ${cc(probe)} minecraft:obsidian`)
+  await sleep(500)
+  if (bot.blockAt(new Vec3(probe.x, probe.y, probe.z))?.name !== 'obsidian') {
+    return `I need to be opped to build a TNT cannon (it uses /setblock and /summon). Op me — add ${bot.username} to the server's ops, or run /op ${bot.username} from the console — then try again.`
+  }
+
+  const buildTrough = async () => {
+    fill(2, 8, -1, 1, -1, -1, 'obsidian') // floor
+    fill(2, 8, -1, -1, 0, 1, 'obsidian')  // left wall
+    fill(2, 8, 1, 1, 0, 1, 'obsidian')    // right wall
+    fill(2, 2, 0, 0, 0, 1, 'obsidian')    // back wall
+    fill(3, 8, 0, 0, 0, 1, 'air')         // clear the channel
+    await sleep(250)
+    bot.chat(`/setblock ${cc(W(3, 0, 0))} minecraft:water`) // water fills the channel
+    await sleep(700)
+  }
+
+  const proj = W(6, 0, 0), chg = W(5, 0, 0)
+  const fireShot = () => {
+    // Full-fuse projectile at the muzzle, then a cluster of short-fuse charge TNT
+    // just behind+below it — the charge blast flings the projectile out the front.
+    bot.chat(`/summon minecraft:tnt ${proj.x + 0.5} ${fy + 0.5} ${proj.z + 0.5} {fuse:80}`)
+    for (let k = 0; k < nCharge; k++) bot.chat(`/summon minecraft:tnt ${chg.x + 0.5} ${fy + 0.1} ${chg.z + 0.5} {fuse:18}`)
+  }
+
+  const seq = startSeq(bot)
+  await buildTrough()
+  let fired = 0
+  for (let i = 0; i < shots; i++) {
+    if (preempted(bot, seq)) break
+    if (i > 0) await buildTrough() // reload: the blast clears the water/channel
+    if (preempted(bot, seq)) break
+    fireShot()
+    fired++
+    for (let t = 0; t < 14; t++) { if (preempted(bot, seq)) break; await sleep(200) } // let the shot clear
+  }
+  await faceCommander(bot)
+  const dir = cardinalFromYaw(bot.entity.yaw)
+  return `Fired ${fired} TNT ${dir} from the cannon (${nCharge} charge each). The obsidian emplacement stays put — "stop" halts an auto-repeat. Keep clear of the muzzle!`
 }
 
 async function collectItems(bot, { range = 16 }) {
@@ -1393,6 +1991,82 @@ async function depositToChest(bot, { x, y, z, itemName, count }) {
   return `Deposited ${deposited} ${name} across ${chestsUsed} chest(s).`
 }
 
+// The single tool/weapon/armor to KEEP per category — the best-tier one — so the bot
+// keeps one of each kind and unloads duplicates and lesser copies. Returns a
+// Map(itemType -> 1) for each kept type.
+function keepBestGear(bot) {
+  const catOf = (name) => {
+    const m = name.match(/_(pickaxe|axe|shovel|hoe|sword|helmet|chestplate|leggings|boots)$/)
+    if (m) return m[1]
+    if (/^(shears|flint_and_steel|fishing_rod|bow|crossbow|trident|shield|brush|spyglass|elytra)$/.test(name) || /_on_a_stick$/.test(name)) return name
+    return null // not a tool/weapon/armor
+  }
+  const tierRank = (name) => { const t = TOOL_TIERS.indexOf(name.split('_')[0]); return t < 0 ? 99 : t }
+  const best = new Map() // category -> highest-tier item
+  for (const it of bot.inventory.items()) {
+    const cat = catOf(it.name)
+    if (!cat) continue
+    const cur = best.get(cat)
+    if (!cur || tierRank(it.name) < tierRank(cur.name)) best.set(cat, it)
+  }
+  const keep = new Map()
+  for (const it of best.values()) keep.set(it.type, 1) // keep one of the best type per category
+  return keep
+}
+
+// Store everything into nearby chests EXCEPT one of each tool/weapon/armor (the best
+// of each kind) — duplicate and lesser copies get unloaded along with the loot.
+// Overflows to the next chest as each fills.
+async function unloadInventory(bot) {
+  // How many of each item type to unload = total on hand minus the one we keep.
+  const unloadAmounts = () => {
+    const keep = keepBestGear(bot)
+    const byType = new Map()
+    for (const i of bot.inventory.items()) byType.set(i.type, (byType.get(i.type) || 0) + i.count)
+    const out = new Map()
+    for (const [type, total] of byType) { const amt = total - (keep.get(type) || 0); if (amt > 0) out.set(type, amt) }
+    return out
+  }
+  const totalToUnload = () => [...unloadAmounts().values()].reduce((s, n) => s + n, 0)
+  if (totalToUnload() === 0) return `Nothing to unload — only one of each tool/weapon/armor on hand.`
+
+  const data = mcData(bot)
+  const ids = ['chest', 'trapped_chest', 'barrel'].map((n) => data.blocksByName[n]?.id).filter((v) => v != null)
+  const positions = bot.findBlocks({ matching: ids, maxDistance: 32, count: 24 })
+  positions.sort((a, b) => bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b))
+  if (!positions.length) return `No chest found nearby to unload into.`
+
+  const seq = startSeq(bot)
+  const startTotal = totalToUnload()
+  let chestsUsed = 0
+  for (const pos of positions) {
+    if (preempted(bot, seq) || totalToUnload() === 0) break
+    const block = bot.blockAt(pos)
+    if (!isContainerBlock(block)) continue
+    await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 3)).catch(() => {})
+    try { await bot.lookAt(pos.offset(0.5, 0.5, 0.5), true) } catch { /* face it */ }
+    let chest
+    try { chest = await bot.openContainer(block) } catch { continue }
+    await sleep(CHEST_PAUSE) // hold it open a beat so it visibly opens
+    const beforeChest = totalToUnload()
+    for (const [type, amt] of unloadAmounts()) { // deposit only the surplus of each type
+      if (preempted(bot, seq)) break
+      try { await chest.deposit(type, null, amt) } catch { /* this chest is full for this item */ }
+    }
+    await sleep(CHEST_PAUSE) // pause before closing
+    chest.close()
+    await sleep(200)
+    if (beforeChest - totalToUnload() > 0) chestsUsed++ // measure after the window closes
+  }
+
+  await faceCommander(bot)
+  const deposited = startTotal - totalToUnload()
+  const left = totalToUnload()
+  if (deposited === 0) return `Couldn't unload anything (chests full or unreachable).`
+  if (left > 0) return `Unloaded ${deposited} item(s) into ${chestsUsed} chest(s); ${left} left — chests are full. Kept one of each tool/armor.`
+  return `Unloaded ${deposited} item(s) into ${chestsUsed} chest(s). Kept one of each tool/armor.`
+}
+
 async function withdrawFromChest(bot, { x, y, z, itemName, count = 1 }) {
   const data = mcData(bot)
   const it = data.itemsByName[itemName] || data.itemsArray.find((i) => i.name.includes(itemName))
@@ -1682,6 +2356,8 @@ module.exports = {
   findBlocks,
   mineNearestBlock,
   digTestTunnel,
+  mineDownshaft,
+  mineStairwell,
   digBlock,
   equipItem,
   dropItem,
@@ -1690,6 +2366,9 @@ module.exports = {
   buildWall,
   fillPit,
   plantField,
+  levelArea,
+  buildRectWall,
+  ceiling,
   mineArea,
   fillSpan,
   mineSpan,
@@ -1697,6 +2376,8 @@ module.exports = {
   attackEntity,
   eat,
   useItem,
+  firework,
+  tntCannon,
   collectItems,
   harvestAndCollect,
   replaceField,
@@ -1706,5 +2387,7 @@ module.exports = {
   activateBlock,
   craftItem,
   depositToChest,
+  unloadInventory,
   withdrawFromChest,
+  equipBetterArmor,
 }

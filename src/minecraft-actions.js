@@ -810,7 +810,16 @@ async function fillPit(bot) {
 // Ground the bot can hoe straight to farmland.
 const HOEABLE = new Set(['grass_block', 'dirt'])
 
+// Crop name → the item you actually plant. Carrots/potatoes plant as the crop
+// item itself, so they need no entry; only the "_seeds" crops are remapped.
+const SEED_ALIASES = {
+  wheat: 'wheat_seeds', beetroot: 'beetroot_seeds', beetroots: 'beetroot_seeds',
+  pumpkin: 'pumpkin_seeds', pumpkins: 'pumpkin_seeds', melon: 'melon_seeds', melons: 'melon_seeds',
+}
+const normalizeSeed = (name) => SEED_ALIASES[String(name || '').toLowerCase()] || name
+
 async function plantField(bot, { seedName }) {
+  seedName = normalizeSeed(seedName) // "plant beetroot" → beetroot_seeds
   // Use the best hoe the bot owns (netherite > diamond > iron > stone > gold > wood).
   const hoes = bot.inventory.items().filter((i) => i.name.endsWith('_hoe'))
   if (!hoes.length) return `No hoe in inventory.`
@@ -1705,8 +1714,24 @@ async function collectItems(bot, { range = 16 }) {
 
 // Harvest in one step: mine all nearby blocks of a type (the bot walks over most
 // drops and auto-picks them up), then sweep up whatever's left on the ground.
+// Harvestable crop blocks, by their block-state name.
+const CROP_BLOCKS = ['wheat', 'carrots', 'potatoes', 'beetroots', 'pumpkin', 'melon', 'nether_wart', 'cocoa', 'sweet_berry_bush']
+
+// The block name of the nearest visible crop (any type), or null if none in range.
+function findNearestCrop(bot) {
+  const data = mcData(bot)
+  const ids = CROP_BLOCKS.map((n) => data.blocksByName[n]?.id).filter((id) => id != null)
+  const pos = bot.findBlocks({ matching: ids, maxDistance: 48, count: 1, useExtraInfo: (b) => bot.canSeeBlock(b) })[0]
+    || bot.findBlocks({ matching: ids, maxDistance: 48, count: 1 })[0]
+  return pos ? (bot.blockAt(pos)?.name || null) : null
+}
+
 async function harvestAndCollect(bot, { blockName, count = 4096 }) {
   const seq = startSeq(bot)
+  if (!blockName) { // no type given → harvest whatever crop is nearest
+    blockName = findNearestCrop(bot)
+    if (!blockName) return 'No crops in sight to harvest.'
+  }
   const mined = await mineNearestBlock(bot, { blockName, count })
   if (preempted(bot, seq)) return mined // a new command took over — don't keep collecting
   const collected = await collectItems(bot, { range: 24 })
@@ -2366,6 +2391,7 @@ module.exports = {
   buildWall,
   fillPit,
   plantField,
+  normalizeSeed,
   levelArea,
   buildRectWall,
   ceiling,

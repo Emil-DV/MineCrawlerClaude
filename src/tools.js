@@ -466,14 +466,14 @@ const tools = [
   },
   {
     name: 'harvestAndCollect',
-    description: 'Harvest in one step: mine all nearby blocks of a type (e.g. "pumpkin", "wheat", "melon") and pick up the drops.',
+    description: 'Harvest in one step: mine all nearby blocks of a type (e.g. "pumpkin", "wheat", "melon") and pick up the drops. Omit the block name to harvest whatever crop is nearest.',
     input_schema: {
       type: 'object',
       properties: {
-        blockName: { type: 'string' },
+        blockName: { type: 'string', description: 'Optional crop type to harvest. Omit to harvest the nearest crop of any type.' },
         count: { type: 'number', description: 'Max blocks to harvest. Omit to harvest all of them; pass a number to cap it.' },
       },
-      required: ['blockName'],
+      required: [],
     },
   },
   {

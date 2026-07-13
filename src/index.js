@@ -3,15 +3,17 @@ const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const readline = require('readline')
 const { tools, dispatch } = require('./tools')
-const { equipBetterArmor } = require('./minecraft-actions')
+const { equipBetterArmor, normalizeSeed } = require('./minecraft-actions')
 
 // Print the avatar's available actions with their parameter order. "??", "?", "help".
 function printCommands() {
   console.log(`\nThe avatar can do ${tools.length} things (type: name then args, e.g. "goTo 10 64 20"):`)
-  for (const t of tools) {
+  const sorted = [...tools].sort((a, b) => a.name.localeCompare(b.name))
+  for (const t of sorted) {
     const params = Object.keys(t.input_schema.properties || {})
     console.log(`${t.name} ${params.length ? params.join(' ') : '(no args)'}`)
     console.log(`    ${t.description}`)
+    console.log('')
   }
 
   // First sentence of a tool's description, capped — a short help string.
@@ -22,10 +24,11 @@ function printCommands() {
   }
 
   console.log('\nShortcuts (short name → full command):')
-  for (const [short, long] of Object.entries(TOOL_NAME_ALIASES)) {
+  const sortByKey = (entries) => entries.sort((a, b) => a[0].localeCompare(b[0]))
+  for (const [short, long] of sortByKey(Object.entries(TOOL_NAME_ALIASES))) {
     console.log(`  ${short} → ${long} — ${shortHelp(long)}`)
   }
-  for (const [phrase, fn] of Object.entries(ALIASES)) {
+  for (const [phrase, fn] of sortByKey(Object.entries(ALIASES))) {
     const tool = fn('you').tool
     console.log(`  "${phrase}" → ${tool} — ${shortHelp(tool)}`)
   }
@@ -383,7 +386,7 @@ bot.once('spawn', () => {
       const fin = (n) => (Number.isFinite(n) ? n : 1)
       switch (name) {
         case 'placeBlock': return { name: v.blockName, count: 1 }
-        case 'plantField': return { name: v.seedName, count: 1 }
+        case 'plantField': return { name: normalizeSeed(v.seedName), count: 1 }
         case 'replaceField': return { name: v.blockName, count: 1 }
         case 'levelArea': return v.fillName ? { name: v.fillName, count: fin((v.width || 1) * (v.length || 1)) } : null
         case 'smeltItem': return { name: v.inputName, count: v.count || 1 }

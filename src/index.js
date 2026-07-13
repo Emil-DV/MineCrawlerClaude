@@ -436,6 +436,7 @@ bot.once('spawn', () => {
 
     // Before a batch, pre-fetch every command's main item so it's all on hand.
     const gatherFor = async (parts) => {
+      if (bot.game?.gameMode === 'creative') return // creative builds use /fill — no items needed
       const need = {}
       for (const part of parts) {
         const r = requiredItem(part)

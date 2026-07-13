@@ -411,13 +411,6 @@ function nearestPlayer(bot) {
   return ps[0].entity
 }
 
-// World-space unit vector of where an entity is looking (Mineflayer yaw: forward = -sin/-cos).
-function lookVector(e) {
-  const yaw = e.yaw || 0
-  const pitch = e.pitch || 0
-  return new Vec3(-Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch))
-}
-
 // Tool tiers, best first, for picking the highest-grade tool of a kind.
 const TOOL_TIERS = ['netherite', 'diamond', 'iron', 'stone', 'golden', 'wooden']
 
@@ -530,22 +523,16 @@ async function mineNearestBlock(bot, { blockName, count = 4096 }) {
       }
     }
 
-    // Order by alignment with the nearest player's gaze (what they're looking at
-    // first, then sweep outward); fall back to nearest if no player is around.
-    const player = nearestPlayer(bot)
-    if (player) {
-      const eye = player.position.offset(0, player.eyeHeight || 1.62, 0)
-      const gaze = lookVector(player)
-      const align = (p) => {
-        const d = p.offset(0.5, 0.5, 0.5).minus(eye)
-        return d.dot(gaze) / (d.norm() || 1)
-      }
-      positions.sort((a, b) => {
-        const diff = align(b) - align(a)
-        if (Math.abs(diff) > 0.02) return diff
-        return bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b)
-      })
-    } // else: findBlocks already returns nearest-first
+    // Always take the closest block from where the bot stands, and clear one row
+    // before drifting to the next — so it works outward steadily instead of
+    // meandering toward far-off blocks. Near-ties break by staying on the same
+    // height/row (stable axis order) to keep the path smooth.
+    positions.sort((a, b) => {
+      const da = bot.entity.position.distanceTo(a)
+      const db = bot.entity.position.distanceTo(b)
+      if (Math.abs(da - db) > 0.5) return da - db
+      return (a.y - b.y) || (a.x - b.x) || (a.z - b.z)
+    })
 
     const pos = positions[0]
     const target = bot.blockAt(pos)
@@ -663,6 +650,48 @@ async function placeBlock(bot, { blockName, x, y, z }) {
 // Place a block at every cell in `cells`, retrying ones that fail (occupied by a
 // player/bot, or temporarily unsupported) in further passes until a pass makes no
 // progress. Cells that are already non-fillable (solid) count as skipped, not missing.
+// --- Creative fast-build ---------------------------------------------------
+// When the bot is in creative mode AND opped, whole regions can be laid with
+// /fill instead of walking and placing each block by hand. Build commands try
+// this path first; if it doesn't apply (survival, or not opped) they fall back
+// to their normal hand-placement.
+const inCreative = (bot) => bot.game?.gameMode === 'creative'
+const cleanName = (name) => String(name).replace(/^minecraft:/, '')
+
+// True only if the bot is in creative and its commands actually take effect.
+// Probed by setting a throwaway block high in the air and checking it applied,
+// then clearing it — so a creative-but-not-opped bot falls back to hand-placing.
+async function canOpBuild(bot) {
+  if (!inCreative(bot)) return false
+  // Probe an already-air cell above the bot so the test never destroys anything.
+  const bx = Math.floor(bot.entity.position.x), bz = Math.floor(bot.entity.position.z)
+  let p = null
+  for (let dy = 30; dy <= 40; dy++) {
+    const c = new Vec3(bx, Math.min(Math.floor(bot.entity.position.y) + dy, 318), bz)
+    if (bot.blockAt(c)?.name === 'air') { p = c; break }
+  }
+  if (!p) return false // no safe spot to probe — fall back to hand-placement
+  bot.chat(`/setblock ${p.x} ${p.y} ${p.z} minecraft:obsidian`)
+  await sleep(400)
+  const ok = bot.blockAt(p)?.name === 'obsidian'
+  if (ok) bot.chat(`/setblock ${p.x} ${p.y} ${p.z} minecraft:air`) // restore the air cell
+  return ok
+}
+
+// Fill an inclusive box with /fill, split into <=32768-block Y-slabs (the vanilla
+// per-command cap). mode is '', 'keep' (air only), 'hollow', 'outline', etc.
+async function opFill(bot, a, b, blockName, mode = '') {
+  const block = cleanName(blockName)
+  const lo = new Vec3(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.min(a.z, b.z))
+  const hi = new Vec3(Math.max(a.x, b.x), Math.max(a.y, b.y), Math.max(a.z, b.z))
+  const layers = Math.max(1, Math.floor(32768 / ((hi.x - lo.x + 1) * (hi.z - lo.z + 1))))
+  for (let y = lo.y; y <= hi.y; y += layers) {
+    const y2 = Math.min(hi.y, y + layers - 1)
+    bot.chat(`/fill ${lo.x} ${y} ${lo.z} ${hi.x} ${y2} ${hi.z} minecraft:${block}${mode ? ' ' + mode : ''}`)
+  }
+  await sleep(300) // let the change propagate back before the caller reads the world
+}
+
 async function placeCells(bot, blockName, cells) {
   const seq = startSeq(bot)
   let placed = 0
@@ -694,6 +723,11 @@ async function fillArea(bot, { blockName, x1, y1, z1, x2, y2, z2 }) {
   const volume = (xb - xa + 1) * (yb - ya + 1) * (zb - za + 1)
   if (volume > MAX_BLOCKS) return `That region is ${volume} blocks; max ${MAX_BLOCKS} per call. Use a smaller area.`
 
+  if (await canOpBuild(bot)) { // creative + opped: fill it instantly
+    await opFill(bot, new Vec3(xa, ya, za), new Vec3(xb, yb, zb), blockName)
+    return `Filled the ${volume}-block area with ${cleanName(blockName)} via /fill (creative).`
+  }
+
   const cells = []
   for (let y = ya; y <= yb; y++) // bottom-up so each layer can support the next
     for (let x = xa; x <= xb; x++)
@@ -710,6 +744,12 @@ async function buildWall(bot, { blockName, x, y, z, direction = 'x', length, hei
   const dz = direction === 'z' ? 1 : 0
   const volume = length * height
   if (volume > MAX_BLOCKS) return `That wall is ${volume} blocks; max ${MAX_BLOCKS} per call. Use a smaller wall.`
+
+  if (await canOpBuild(bot)) { // creative + opped: fill the whole plane at once
+    const end = new Vec3(x + dx * (length - 1), y + height - 1, z + dz * (length - 1))
+    await opFill(bot, new Vec3(x, y, z), end, blockName)
+    return `Built the ${length}x${height} ${cleanName(blockName)} wall via /fill (creative).`
+  }
 
   const cells = []
   for (let h = 0; h < height; h++) // bottom-up so lower blocks support the row above
@@ -1058,6 +1098,14 @@ async function levelArea(bot, { width, length, fillName }) {
     }
   }
 
+  if (await canOpBuild(bot)) { // creative + opped: mow to air and fill holes with /fill
+    await opFill(bot, new Vec3(minx, floorY + 1, minz), new Vec3(maxx, floorY + MOW_UP, maxz), 'air')
+    await opFill(bot, new Vec3(minx, floorY, minz), new Vec3(maxx, floorY, maxz), cleanName(fillName || 'dirt'), 'keep')
+    bot.lastRect = { minx, maxx, minz, maxz, floorY }
+    await faceCommander(bot)
+    return `Levelled the ${w}x${l} area at y=${floorY} via /fill (creative).`
+  }
+
   const fill = pickFillBlock(bot, fillName)
 
   const seq = startSeq(bot)
@@ -1157,6 +1205,18 @@ async function buildRectWall(bot, { height = 1, blockName }) {
   const h = Math.max(1, Math.min(Math.floor(Number(height) || 1), 24))
   const { minx, maxx, minz, maxz, floorY } = rect
   rect.wallTop = floorY + h // remember the top course so "ceiling" can roof at this level
+
+  if (await canOpBuild(bot)) { // creative + opped: fill the four wall planes at once
+    const cb = cleanName(blockName || 'stone')
+    const y0 = floorY + 1, y1 = floorY + h
+    await opFill(bot, new Vec3(minx, y0, minz), new Vec3(minx, y1, maxz), cb) // west
+    await opFill(bot, new Vec3(maxx, y0, minz), new Vec3(maxx, y1, maxz), cb) // east
+    await opFill(bot, new Vec3(minx, y0, minz), new Vec3(maxx, y1, minz), cb) // north
+    await opFill(bot, new Vec3(minx, y0, maxz), new Vec3(maxx, y1, maxz), cb) // south
+    await faceCommander(bot)
+    return `Built a ${h}-high ${cb} wall around the ${maxx - minx + 1}x${maxz - minz + 1} area via /fill (creative).`
+  }
+
   const block = pickFillBlock(bot, blockName)
   if (!block) { bot.missingItem = 'stone'; return `No stone/dirt in inventory to build the wall with.` }
 
@@ -1272,7 +1332,7 @@ function enclosureAtFeet(bot) {
 // solid neighbour (the wall, then placed ceiling) to rest against.
 async function ceiling(bot, { blockName }) {
   const rect = bot.lastRect
-  let minx, maxx, minz, maxz, floorY, topY, cells
+  let minx, maxx, minz, maxz, floorY, topY, cells, fullRect = false
 
   if (rect) {
     ;({ minx, maxx, minz, maxz, floorY } = rect)
@@ -1286,6 +1346,7 @@ async function ceiling(bot, { blockName }) {
     }
     // Whole footprint in spiral order; the wall ring is already solid (skipped fast).
     cells = spiralCells(minx, maxx, minz, maxz)
+    fullRect = true
   } else {
     // No level/wall memory — roof the enclosure the bot is standing inside.
     const found = enclosureAtFeet(bot)
@@ -1294,6 +1355,16 @@ async function ceiling(bot, { blockName }) {
     // Spiral the interior as a continuous path (skip bbox cells that aren't interior).
     const inside = new Set(found.cells.map(([x, z]) => `${x},${z}`))
     cells = spiralCells(minx, maxx, minz, maxz).filter(([x, z]) => inside.has(`${x},${z}`))
+    fullRect = found.cells.length === (maxx - minx + 1) * (maxz - minz + 1) // rectangular room
+  }
+
+  // Creative + opped: a rectangular ceiling is one flat /fill. (Irregular rooms
+  // fall through to hand-placement so we don't drop blocks outside the walls.)
+  if (fullRect && await canOpBuild(bot)) {
+    const cb = cleanName(blockName || 'stone')
+    await opFill(bot, new Vec3(minx, topY, minz), new Vec3(maxx, topY, maxz), cb)
+    await faceCommander(bot)
+    return `Roofed the ${maxx - minx + 1}x${maxz - minz + 1} area at y=${topY} with ${cb} via /fill (creative).`
   }
 
   const block = pickFillBlock(bot, blockName)

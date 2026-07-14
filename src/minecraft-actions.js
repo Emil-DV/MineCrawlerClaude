@@ -543,6 +543,15 @@ async function mineNearestBlock(bot, { blockName, count = 4096 }) {
     if (!bot.canDigBlock(target)) return `Mined ${mined}; can't dig the next ${blockName} (wrong tool?).`
     await bot.dig(target)
     mined++
+    // Grab this block's drop before moving on, so nothing gets left behind.
+    await sleep(150) // let the dropped item spawn as an entity
+    for (let g = 0; g < 3; g++) {
+      if (preempted(bot, seq)) break
+      const drop = bot.nearestEntity((e) => e.name === 'item' && bot.entity.position.distanceTo(e.position) <= 4)
+      if (!drop) break
+      await bot.pathfinder.goto(new goals.GoalNear(drop.position.x, drop.position.y, drop.position.z, 0)).catch(() => {})
+      await sleep(150)
+    }
   }
   // Done — nothing left to mine (or count reached). Turn to face the commander.
   await faceCommander(bot)
@@ -778,7 +787,7 @@ async function fillPit(bot) {
   const isSolid = (x, y, z) => { const b = bot.blockAt(new Vec3(x, y, z)); return b && b.boundingBox === 'block' }
 
   // Flood-fill the enclosed open cells at feet level to map the pit footprint.
-  const MAX_FOOTPRINT = 256
+  const MAX_FOOTPRINT = 1024
   const key = (x, z) => `${x},${z}`
   const footprint = new Map([[key(fx, fz), [fx, fz]]])
   const queue = [[fx, fz]]
@@ -887,7 +896,7 @@ async function plantField(bot, { seedName }) {
   }
 
   // Flood-fill the flat area at the bot's feet, bounded by path-blocking walls.
-  const MAX = 256
+  const MAX = 1024
   const bx = Math.floor(bot.entity.position.x), bz = Math.floor(bot.entity.position.z)
   if (!isField(bx, bz)) return `Stand on the field (plantable ground enclosed by walls) first.`
   const key = (x, z) => `${x},${z}`
@@ -990,7 +999,7 @@ async function replaceField(bot, { blockName }) {
     return !!floor && floor.boundingBox === 'block' && !blocksPath(x, z)
   }
 
-  const MAX = 256
+  const MAX = 1024
   const bx = Math.floor(bot.entity.position.x), bz = Math.floor(bot.entity.position.z)
   if (!isCell(bx, bz)) return `Stand on the area (flat floor enclosed by walls) first.`
   const key = (x, z) => `${x},${z}`
@@ -1077,7 +1086,7 @@ const MOW_UP = 8
 async function levelArea(bot, { width, length, fillName }) {
   const w = Math.max(1, Math.floor(Number(width) || 0))
   const l = Math.max(1, Math.floor(Number(length) || 0))
-  if (w * l > 256) return `That area is ${w}x${l} (${w * l} cells); max 256 per call. Use a smaller size.`
+  if (w * l > 1024) return `That area is ${w}x${l} (${w * l} cells); max 1024 per call. Use a smaller size.`
 
   const F = FORWARD_BY_DIR[cardinalFromYaw(bot.entity.yaw)]
   const R = { x: -F.z, z: F.x } // unit step to the bot's right
@@ -1293,7 +1302,7 @@ function enclosureAtFeet(bot) {
 
   const bx = Math.floor(bot.entity.position.x), bz = Math.floor(bot.entity.position.z)
   if (!isOpen(bx, bz)) return { error: `Stand inside the walled area (on its floor) and run ceiling — or run "level" first.` }
-  const MAX = 256, key = (x, z) => `${x},${z}`
+  const MAX = 1024, key = (x, z) => `${x},${z}`
   const interior = new Map([[key(bx, bz), [bx, bz]]])
   const queue = [[bx, bz]]
   while (queue.length && interior.size <= MAX) {
@@ -1589,32 +1598,44 @@ function findBlocks(bot, { blockName, range = 32, count = 8 }) {
   return `Found ${positions.length} ${blockName}: ${list.join('; ')}.`
 }
 
-async function attackEntity(bot, { target }) {
+async function attackEntity(bot, { target, count = 1 }) {
+  const kills = Math.max(1, Math.floor(Number(count) || 1))
   const pick = () =>
     target
       ? bot.nearestEntity((e) => e !== bot.entity && (e.name === target || e.username === target || e.displayName === target))
       : bot.nearestEntity((e) => e !== bot.entity && (e.type === 'hostile' || e.type === 'mob'))
 
-  let victim = pick()
-  if (!victim) return `No ${target || 'mob'} nearby to attack.`
   await equipBestOfCategory(bot, 'sword') // wield the best sword for the fight
-  const id = victim.id
-  const name = victim.name || victim.username || 'entity'
-
+  const noun = target || 'mob'
   const seq = startSeq(bot)
-  let hits = 0
-  while (victim && victim.isValid && hits < 25) {
-    if (preempted(bot, seq)) return `Attacked ${name} (${hits} hit${hits === 1 ? '' : 's'}) — stopped.`
-    if (bot.entity.position.distanceTo(victim.position) > 3) {
-      await bot.pathfinder.goto(new goals.GoalNear(victim.position.x, victim.position.y, victim.position.z, 2)).catch(() => {})
+  let killed = 0, totalHits = 0, stalled = false
+
+  // Fight one target at a time; after each drops, move on to the next nearest
+  // match until we've felled `count` of them (or none are left in range).
+  while (killed < kills) {
+    let victim = pick()
+    if (!victim) break
+    const id = victim.id
+    let hits = 0
+    while (victim && victim.isValid && hits < 25) {
+      if (preempted(bot, seq)) return `Attacked ${noun}s (${killed} down, ${totalHits + hits} hit${totalHits + hits === 1 ? '' : 's'}) — stopped.`
+      if (bot.entity.position.distanceTo(victim.position) > 3) {
+        await bot.pathfinder.goto(new goals.GoalNear(victim.position.x, victim.position.y, victim.position.z, 2)).catch(() => {})
+      }
+      await bot.lookAt(victim.position.offset(0, 1, 0), true)
+      bot.attack(victim)
+      hits++
+      await sleep(600)
+      victim = bot.entities[id] && bot.entities[id].isValid ? bot.entities[id] : null
     }
-    await bot.lookAt(victim.position.offset(0, 1, 0), true)
-    bot.attack(victim)
-    hits++
-    await sleep(600)
-    victim = bot.entities[id] && bot.entities[id].isValid ? bot.entities[id] : null
+    totalHits += hits
+    if (victim && victim.isValid) { stalled = true; break } // 25 hits and still up — give up
+    killed++
   }
-  return `Attacked ${name} (${hits} hit${hits === 1 ? '' : 's'}).`
+
+  if (killed === 0 && totalHits === 0) return `No ${noun} nearby to attack.`
+  const note = stalled ? ` — the last one wouldn't go down` : (killed < kills ? ` — no more ${noun}s in range` : '')
+  return `Attacked ${noun}${killed === 1 ? '' : 's'}: ${killed} killed, ${totalHits} hit${totalHits === 1 ? '' : 's'}${note}.`
 }
 
 async function eat(bot, { foodName }) {
@@ -2163,6 +2184,116 @@ async function unloadInventory(bot) {
   return `Unloaded ${deposited} item(s) into ${chestsUsed} chest(s). Kept one of each tool/armor.`
 }
 
+// Open the nearest chest/barrel, consolidate partial stacks of the same item,
+// then reorder the stacks alphabetically by item name, packed to the front.
+// The reorder is a selection sort that only ever swaps stacks of DIFFERENT items
+// (same-named stacks are interchangeable), so the shuffle can't accidentally
+// merge anything and stays a clean permutation of slots.
+async function sortChest(bot) {
+  const data = mcData(bot)
+  const ids = ['chest', 'trapped_chest', 'barrel'].map((n) => data.blocksByName[n]?.id).filter((v) => v != null)
+  const positions = bot.findBlocks({ matching: ids, maxDistance: 32, count: 24 })
+  positions.sort((a, b) => bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b))
+  if (!positions.length) return `No chest found nearby to sort.`
+
+  const seq = startSeq(bot)
+  // Walk to the nearest chest that actually has something to sort — skip empty or
+  // single-stack ones (e.g. when standing among a bank of mostly-empty chests).
+  let chest, pos
+  for (const p of positions.slice(0, 8)) {
+    if (preempted(bot, seq)) return `Sorting stopped.`
+    const block = bot.blockAt(p)
+    if (!isContainerBlock(block)) continue
+    await bot.pathfinder.goto(new goals.GoalNear(p.x, p.y, p.z, 3)).catch(() => {})
+    try { await bot.lookAt(p.offset(0.5, 0.5, 0.5), true) } catch { /* face it */ }
+    let c
+    try { c = await bot.openContainer(block) } catch { continue }
+    let stacks = 0
+    for (let s = 0; s < c.inventoryStart; s++) if (c.slots[s]) stacks++
+    if (stacks >= 2) { chest = c; pos = p; break } // worth sorting — keep it open
+    c.close(); await sleep(150) // nothing to sort here — try the next chest
+  }
+  if (!chest) return `No nearby chest has enough items to sort.`
+  await sleep(CHEST_PAUSE)
+
+  try {
+    const size = chest.inventoryStart // number of container (non-player) slots
+    // Model each container slot: registry name (drives same-item grouping), the
+    // display name (drives the visible A–Z order, e.g. "Steak" sorts under S even
+    // though its id is cooked_beef), count, and the item's max stack size.
+    const name = new Array(size).fill(null)
+    const disp = new Array(size).fill(null)
+    const count = new Array(size).fill(0)
+    const max = new Array(size).fill(0)
+    let n = 0
+    for (let s = 0; s < size; s++) {
+      const it = chest.slots[s]
+      if (it) { name[s] = it.name; disp[s] = it.displayName || it.name; count[s] = it.count; max[s] = it.stackSize || 64; n++ }
+    }
+    if (n < 2) { chest.close(); await faceCommander(bot); return `The chest has ${n} stack(s) — nothing to sort.` }
+
+    // 1) Consolidate: pour partial stacks of the same item into lower slots first.
+    // moveSlotItem merges when source and dest share an item (leftover returns to
+    // the source), which empties the source once it's fully drained.
+    let merges = 0
+    const byName = new Map()
+    for (let s = 0; s < size; s++) {
+      if (!name[s]) continue
+      if (!byName.has(name[s])) byName.set(name[s], [])
+      byName.get(name[s]).push(s)
+    }
+    for (const group of byName.values()) {
+      if (group.length < 2) continue
+      let ti = 0 // index into group of the slot we're currently topping up
+      for (let k = 1; k < group.length; k++) {
+        const src = group[k]
+        while (count[src] > 0 && ti < k) {
+          if (preempted(bot, seq)) break
+          const tgt = group[ti]
+          if (count[tgt] >= max[tgt]) { ti++; continue } // this target is full
+          const moved = Math.min(max[tgt] - count[tgt], count[src])
+          await bot.moveSlotItem(src, tgt)
+          merges++
+          count[tgt] += moved; count[src] -= moved
+          if (count[src] === 0) { name[src] = null; disp[src] = null; n-- } // source drained empty
+          if (count[tgt] >= max[tgt]) ti++
+          await sleep(120)
+        }
+      }
+    }
+
+    // 2) Selection-sort the consolidated stacks by display name (A–Z), packed to
+    // front. Ties keep the lowest slot, so slot i is left alone when it already
+    // holds the smallest name — every swap is between DIFFERENT items (never merges).
+    const cur = disp.slice()
+    let moves = 0
+    for (let i = 0; i < n; i++) {
+      if (preempted(bot, seq)) break
+      let m = -1
+      for (let s = i; s < size; s++) {
+        if (!cur[s]) continue
+        if (m === -1 || cur[s].localeCompare(cur[m]) < 0) m = s
+      }
+      if (m === -1 || m === i) continue
+      await bot.moveSlotItem(m, i)
+      moves++
+      const t = cur[i]; cur[i] = cur[m]; cur[m] = t
+      await sleep(120)
+    }
+
+    await sleep(CHEST_PAUSE)
+    chest.close()
+    await sleep(150)
+    await faceCommander(bot)
+    const where = pos ? ` at (${pos.x}, ${pos.y}, ${pos.z})` : ''
+    const mergeNote = merges ? `, merged ${merges} partial stack${merges === 1 ? '' : 's'}` : ''
+    return `Sorted the chest${where} alphabetically — ${n} stack(s)${mergeNote}, ${moves} move(s).`
+  } catch (e) {
+    try { chest.close() } catch { /* already closed */ }
+    return `Sorting failed: ${e.message}`
+  }
+}
+
 async function withdrawFromChest(bot, { x, y, z, itemName, count = 1 }) {
   const data = mcData(bot)
   const it = data.itemsByName[itemName] || data.itemsArray.find((i) => i.name.includes(itemName))
@@ -2485,6 +2616,7 @@ module.exports = {
   craftItem,
   depositToChest,
   unloadInventory,
+  sortChest,
   withdrawFromChest,
   equipBetterArmor,
 }

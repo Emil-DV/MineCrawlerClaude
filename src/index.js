@@ -120,6 +120,7 @@ const TOOL_NAME_ALIASES = {
   grab: 'withdrawFromChest',
   store: 'depositToChest',
   unload: 'unloadInventory',
+  sort: 'sortChest',
   craft: 'craftItem',
   place: 'placeBlock',
   equip: 'equipItem',

@@ -418,10 +418,13 @@ const tools = [
   },
   {
     name: 'attackEntity',
-    description: 'Attack an entity until it dies or flees. Give a target name (e.g. "zombie", "cow", or a player name) to attack the nearest match; omit it to attack the nearest hostile mob.',
+    description: 'Attack entities until they die or flee. Give a target name (e.g. "zombie", "cow", or a player name) to attack the nearest match; omit it to attack the nearest hostile mob. Pass a count to fell that many of them in a row.',
     input_schema: {
       type: 'object',
-      properties: { target: { type: 'string', description: 'Entity name to attack. Omit for nearest hostile mob.' } },
+      properties: {
+        target: { type: 'string', description: 'Entity name to attack. Omit for nearest hostile mob.' },
+        count: { type: 'number', description: 'How many matching entities to kill. Defaults to 1.' },
+      },
     },
   },
   {
@@ -591,6 +594,11 @@ const tools = [
   {
     name: 'unloadInventory',
     description: 'Store everything into nearby chests/barrels EXCEPT one of each tool, weapon, and armor kind (the best-tier one) — duplicate and lesser copies get unloaded with the loot. Overflows to the next nearest chest as each fills. Good for "dump everything, keep one of my gear" after a trip.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'sortChest',
+    description: 'Walk to the nearest chest/barrel, open it, merge partial stacks of the same item, and reorder its contents alphabetically by item name (packed to the front).',
     input_schema: { type: 'object', properties: {} },
   },
   {
